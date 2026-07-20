@@ -8,7 +8,6 @@ const AI_NAMES = ['Vettori', 'Okonkwo', 'Larsson', 'Tanaka', 'Moreau', 'Novak', 
 const N_SAMPLES = 1400;
 const SUBSTEPS = 3;
 const SPEED_DISPLAY_SCALE = 0.45;   // the car really moves fast; show a friendlier number (~200 top)
-const COAST_BRAKE = 0.4;            // one-pedal: braking force applied when the player is off the gas
 
 // Terrain + banking tuning
 const BANK_GAIN = 18;               // curvature -> cross-slope; higher = more banked corners
@@ -66,9 +65,7 @@ let camMode = CAM_CHASE;
 let muted = false;
 let steerInvert = localStorage.getItem('apex_steerInvert') === '1';
 let mouseThrottle = false, mouseBrake = false;   // click-and-hold pedals (held state)
-let gasPedal = false;                            // gas-pedal TOGGLE latch (momentary 2nd-mouse device)
 let throttlePedal = 0, brakePedal = 0;           // analog pedal travel — eases in/out, not on/off
-const DIAG = { n: 0, last: '(no input yet)', log: [], thr: 0, brk: 0 };   // TEMP diagnostic — remove after pedal confirmed
 // gyroSteer + phoneConnected live in pair.js (phone controller)
 let GRAD = null, OUTLINE_MAT = null;
 const keys = {};
@@ -164,50 +161,23 @@ function boot() {
     keys[e.key.toLowerCase()] = false;
     if (e.code === 'Space') keys[' '] = false;
   });
-  // BOTH mice report on LEFT button (0); telling them apart by TIMING:
-  //   * DESKTOP mouse = a real HOLD: button down, held >140ms, up on release -> throttle while held.
-  //   * GAS pedal = a momentary "click" device: fires down+up together (<140ms) on each press,
-  //     nothing on real release, and ONLY legacy mouse events. A quick click flips the latch.
-  //   * RIGHT button (2) = brake.
-  // Throttle ON = (button currently held) OR (latch set). gasPedal (latch) is exposed for the HUD.
-  // Bind ONLY legacy mouse events (both mice emit them) so there's no pointer+mouse double-fire.
-  let heldDown = false, downAt = -1e9;
-  const syncThrottle = () => { mouseThrottle = heldDown || gasPedal; };
-  const releasePedals = () => { heldDown = gasPedal = false; mouseThrottle = mouseBrake = false; };
-  const onDown = e => {
+  // click / press-and-hold = throttle (left button = gas, right button = brake).
+  addEventListener('pointerdown', e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
-    if (e.button === 2) { mouseBrake = true; return; }       // right = brake
-    heldDown = true; downAt = performance.now();             // any other button = gas (hold begins)
-    syncThrottle();
-  };
-  const onUp = e => {
-    if (e.button === 2) { mouseBrake = false; return; }
-    const held = performance.now() - downAt;
-    heldDown = false;
-    if (held < 140) gasPedal = !gasPedal;                    // quick click (gas pedal) -> flip the latch
-    syncThrottle();                                          // a real hold-release just drops heldDown
-  };
-  addEventListener('mousedown', onDown);
-  addEventListener('mouseup', onUp);
-  // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
-  // window blurs before keyup, keys['w'] latches ON forever and throttle = max(kThr, pedal) pins at
-  // 1.00 regardless of the mouse (the "throttle stuck, release does nothing" bug).
-  const releaseAllControls = () => { releasePedals(); for (const k in keys) keys[k] = false; };
-  addEventListener('blur', releaseAllControls);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllControls(); });
+    if (e.button === 0) mouseThrottle = true;
+    else if (e.button === 2) mouseBrake = true;
+  });
+  addEventListener('pointerup', e => {
+    if (e.button === 0 || !(e.buttons & 1)) mouseThrottle = false;
+    if (e.button === 2 || !(e.buttons & 2)) mouseBrake = false;
+  });
+  addEventListener('pointercancel', () => { mouseThrottle = mouseBrake = false; });
+  // clear held state on focus loss (mouse + keyboard) so nothing sticks on
+  const clearHeld = () => { mouseThrottle = mouseBrake = false; for (const k in keys) keys[k] = false; };
+  addEventListener('blur', clearHeld);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) clearHeld(); });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
-  // TEMP DIAGNOSTIC overlay — records raw pointer/mouse/touch events so we can see what THIS
-  // browser actually reports. Remove once the pedal is confirmed working.
-  const diagPush = s => { DIAG.n++; DIAG.last = s; DIAG.log.unshift(DIAG.n + ': ' + s); if (DIAG.log.length > 6) DIAG.log.pop(); };
-  ['pointerdown','pointerup','pointermove','mousedown','mouseup','touchstart','touchend'].forEach(t =>
-    addEventListener(t, e => {
-      if (t === 'pointermove' && !(e.buttons & 3)) return;   // only log moves while a button is held
-      diagPush(`${t} btn=${e.button ?? '-'} bts=${e.buttons ?? '-'} id=${e.pointerId ?? '-'}`);
-    }, true));
-  // also capture keyboard — a "pedal" device may actually emit a key, not a mouse click
-  ['keydown', 'keyup'].forEach(t =>
-    addEventListener(t, e => diagPush(`${t} key="${e.key}" code=${e.code}`), true));
   updateInvertBtn();
   startAccountFlow(() => buildMenu());
   requestAnimationFrame(loop);
@@ -1601,50 +1571,9 @@ function updateHUD() {
 }
 
 // ---------------------------------------------------------------- main loop
-let _diagEl = null;
-function renderDiag() {
-  if (!_diagEl) {
-    _diagEl = document.createElement('div');
-    _diagEl.style.cssText = 'position:fixed;top:6px;left:6px;z-index:9999;background:rgba(0,0,0,.82);color:#0f0;'
-      + 'font:12px/1.4 monospace;padding:8px 10px;border:1px solid #0a0;border-radius:6px;white-space:pre;pointer-events:none;max-width:90vw';
-    document.body.appendChild(_diagEl);
-  }
-  // rolling FPS over ~0.5s (performance.now is allowed in the browser)
-  const t = performance.now();
-  DIAG._fc = (DIAG._fc || 0) + 1;
-  if (DIAG._ft === undefined) DIAG._ft = t;
-  if (t - DIAG._ft >= 500) { DIAG.fps = Math.round(DIAG._fc * 1000 / (t - DIAG._ft)); DIAG._fc = 0; DIAG._ft = t; }
-  const fps = DIAG.fps || 0;
-
-  const src = (document.querySelector('script[src*="main.js"]') || {}).src || '';
-  const ver = (src.match(/v=(\d+)/) || [])[1] || '?';
-  const spd = player ? Math.round(Math.hypot(player.velX, player.velZ) * 3.6 * SPEED_DISPLAY_SCALE) : '-';
-
-  // plain-English self-diagnosis
-  let verdict, vcolor;
-  const kw = (keys['w'] || keys['arrowup']) ? 1 : 0;
-  if (fps > 0 && fps < 20) { verdict = `⚠ RUNNING SLOW — ${fps} FPS. Click this window to focus it!`; vcolor = '#f66'; }
-  else if (state === 'countdown') { verdict = 'countdown… (waiting for GO)'; vcolor = '#fd6'; }
-  else if (state !== 'race' && state !== 'tt') { verdict = 'not racing (state=' + state + ')'; vcolor = '#fd6'; }
-  else if (kw && !mouseThrottle) { verdict = "⚠ keyboard 'W' STUCK on — tap W once, or refresh"; vcolor = '#f66'; }
-  else if ((DIAG.thr || 0) > 0.5 && spd < 8) { verdict = '⚠ throttle ON but not moving — screenshot this'; vcolor = '#f66'; }
-  else { verdict = `OK — ${fps} FPS`; vcolor = '#6f6'; }
-
-  _diagEl.innerHTML =
-    `BUILD v=${ver}\n`
-    + `<b style="font-size:16px;color:${vcolor}">${verdict}</b>\n`
-    + `<b style="font-size:22px;color:${gasPedal ? '#3f6' : '#f66'}">GAS PEDAL: ${gasPedal ? 'ON' : 'OFF'}</b>  <span style="opacity:.7">(click gas mouse to flip)</span>\n`
-    + `<b style="font-size:20px;color:#ffd23e">throttle=${(DIAG.thr || 0).toFixed(2)}  brake=${(DIAG.brk || 0).toFixed(2)}</b>\n`
-    + `<b style="font-size:20px;color:#6cf">SPEED=${spd}  FPS=${fps}</b>\n`
-    + `state=${state}  mThrottle=${mouseThrottle ? 1 : 0}  keyW=${keys['w'] ? 1 : 0}\n`
-    + `<b style="color:#8ef">--- last inputs (newest first) ---</b>\n`
-    + (DIAG.log.length ? DIAG.log.join('\n') : '(click your gas mouse)');
-}
 function loop() {
   requestAnimationFrame(loop);
   let dt = Math.min(clock.getDelta(), 0.05);
-  DIAG.dt = +dt.toFixed(4); DIAG.frames = (DIAG.frames || 0) + 1;
-  renderDiag();
 
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) $('toast').style.opacity = '0'; }
   if (state === 'menu' || state === 'paused' || !track) return;
@@ -1690,13 +1619,12 @@ function loop() {
       for (const car of cars) {
         let input;
         if (car.isPlayer) {
-          const thr = Math.max(kThr, throttlePedal);     // keyboard is instant; click pedal is analog
-          let brk = Math.max(kBrk, brakePedal);
-          // ONE-PEDAL feel: when you're not on the gas (and not already braking), coast-brake so
-          // lifting off actively slows the car like engine braking. COAST_BRAKE is tunable.
-          if (thr < 0.06 && brk < 0.06) brk = COAST_BRAKE;
-          input = { throttle: thr, brake: brk, steer: playerSteer(), handbrake: keys[' '] ? 1 : 0 };
-          DIAG.thr = thr; DIAG.brk = +brk.toFixed(2);
+          input = {
+            throttle: Math.max(kThr, throttlePedal),   // keyboard is instant; click pedal is analog
+            brake: Math.max(kBrk, brakePedal),
+            steer: playerSteer(),
+            handbrake: keys[' '] ? 1 : 0,
+          };
         } else if (car.finished) {
           input = aiInputs(car); input.throttle = Math.min(input.throttle, 0.4);
         } else {
