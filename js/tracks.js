@@ -129,6 +129,29 @@ const TRACKS = [
     ],
   },
   {
+    id: 'homestead',
+    name: 'Homestead Loop',
+    desc: 'Traced from real New Hampshire backroads — an antler loop past fields, forest and a river bend.',
+    width: 64,                                   // 1.5x the usual circuit; scaled to real size so it fits
+    hills: 0.22,
+    surface: 'asphalt',
+    env: 'countryside',
+    laps: 2,
+    // river route wraps the south/west outside the loop (no road crossings)
+    river: [[-898, -260], [-948, 120], [-838, 555], [-250, 785], [220, 825], [560, 745], [774, 535], [834, 120]],
+    points: [
+      [295, 205], [414, 135], [534, 66], [636, -9], [654, -114],
+      [602, -234], [534, -335], [480, -342], [496, -240], [532, -116],
+      [512, -12], [426, 45], [373, 11], [386, -105], [382, -215],
+      [328, -219], [282, -113], [240, 18], [166, 126], [58, 161],
+      [-49, 98], [-153, 9], [-237, -90], [-270, -217], [-312, -321],
+      [-385, -311], [-399, -214], [-422, -162], [-500, -225], [-615, -287],
+      [-718, -280], [-711, -208], [-616, -126], [-505, -42], [-398, 45],
+      [-302, 144], [-235, 260], [-219, 393], [-224, 522], [-193, 595],
+      [-91, 565], [24, 494], [107, 390], [185, 281],
+    ],
+  },
+  {
     id: 'baja',
     name: 'Dust Devil Rally',
     desc: 'Loose dirt, big slides. Momentum is king.',

@@ -49,6 +49,8 @@ const ENVS = {
   forest: { ground: 0x4f9a3d, ground2: 0x3c7c2c, sky: 0x9fd2ff, top: 0x2c6ec6, horizon: 0xcbe6ff, fog: 1500, scatter: 'trees', dense: 1.4 },
   desert: { ground: 0xd6ad6a, ground2: 0xc09452, sky: 0xf3dcab, top: 0x6f9fd6, horizon: 0xf6e6bf, fog: 1500, scatter: 'rocks', dense: 0.6 },
   city:   { ground: 0x6a707a, ground2: 0x585e68, sky: 0xc2cee0, top: 0x6a7a94, horizon: 0xd4dde8, fog: 1300, scatter: 'buildings', dense: 0.5 },
+  // rural New Hampshire: patchwork fields, forest, scattered farms, a river. Composite scatter.
+  countryside: { ground: 0x6fae43, ground2: 0x548a31, sky: 0x9fd2ff, top: 0x2f74cf, horizon: 0xcfe8ff, fog: 1900, scatter: 'countryside', dense: 0.85 },
   oval:   { ground: 0x62ab3e, ground2: 0x4d8a30, sky: 0x9fd2ff, top: 0x2f74cf, horizon: 0xcfe8ff, fog: 2000, scatter: 'stands', dense: 0.7 },
 };
 
@@ -809,6 +811,88 @@ function buildForest(env, scatterPos, outlineInstanced) {
   outlineInstanced(blobs, 1.05);
 }
 
+// ---- countryside scenery: patchwork fields, farm buildings, and a river ----
+// A terrain-draped grid quad (samples terrainHeight per vertex so it hugs hills, not floats).
+function drapedPatch(cx, cz, w, d, yaw, color, yLift) {
+  const seg = 5, ca = Math.cos(yaw), sa = Math.sin(yaw);
+  const pos = [], idx = [];
+  for (let i = 0; i <= seg; i++) for (let k = 0; k <= seg; k++) {
+    const lx = (i / seg - 0.5) * w, lz = (k / seg - 0.5) * d;
+    const x = cx + lx * ca - lz * sa, z = cz + lx * sa + lz * ca;
+    pos.push(x, terrainHeight(x, z) + yLift, z);
+  }
+  for (let i = 0; i < seg; i++) for (let k = 0; k < seg; k++) {
+    const a = i * (seg + 1) + k, b = a + 1, c = a + seg + 1, e = c + 1;
+    idx.push(a, c, b, b, c, e);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, toonMat(color, { side: THREE.DoubleSide }));
+  m.receiveShadow = true;
+  scene.add(m);
+}
+function buildFields(scatterPos) {
+  const crops = [0xcdb45a, 0xd8c56a, 0x8a6a44, 0x9c7a4e, 0x7ea63e, 0x5f8a34, 0xa8b357]; // wheat, tilled, crops
+  for (let i = 0; i < 30; i++) {
+    const p = scatterPos(track.halfW + 55);
+    if (!p) continue;
+    drapedPatch(p[0], p[1], rand(120, 300), rand(120, 300), rand(0, 6.28), crops[i % crops.length], 0.05 + Math.random() * 0.06);
+  }
+}
+function buildFarms(scatterPos) {
+  const bodyPal = [0x9c2b25, 0xb8352c, 0xe8e2d4, 0xd8cdb8, 0x7a6a54, 0xcabca4]; // barn red, farmhouse white, wood
+  const roofPal = [0x3a3f47, 0x55402f, 0x6a7078, 0x4a4038];
+  const box = new THREE.BoxGeometry(1, 1, 1);
+  for (let i = 0; i < 30; i++) {
+    const p = scatterPos(track.halfW + 20);
+    if (!p) continue;
+    const w = rand(11, 24), d = rand(11, 30), h = rand(6, 12);
+    const gy = terrainHeight(p[0], p[1]), yaw = Math.floor(rand(0, 4)) * Math.PI / 2 + rand(-0.25, 0.25);
+    const grp = new THREE.Group();
+    const body = new THREE.Mesh(box, toonMat(bodyPal[i % bodyPal.length]));
+    body.scale.set(w, h, d); body.position.y = h / 2; body.castShadow = true;
+    grp.add(body);
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(Math.max(w, d) * 0.72, h * 0.7, 4), toonMat(roofPal[i % roofPal.length]));
+    roof.rotation.y = Math.PI / 4; roof.position.y = h + h * 0.35; roof.scale.set(w / Math.max(w, d), 1, d / Math.max(w, d)); roof.castShadow = true;
+    grp.add(roof);
+    if (i % 4 === 0) {   // a silo next to some barns
+      const silo = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.2, h * 1.3, 10), toonMat(0xbfc4c9));
+      silo.position.set(w * 0.5 + 4, h * 0.65, d * 0.2); silo.castShadow = true; grp.add(silo);
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(3.2, 10, 6, 0, 6.28, 0, 1.57), toonMat(0x9aa0a6));
+      dome.position.set(w * 0.5 + 4, h * 1.3, d * 0.2); grp.add(dome);
+    }
+    grp.position.set(p[0], gy, p[1]); grp.rotation.y = yaw;
+    scene.add(grp);
+  }
+}
+// The river: a terrain-draped blue ribbon following a smoothed curve (not a closed loop).
+function buildRiver(pts) {
+  const curve = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(p[0], 0, p[1])), false, 'centripetal');
+  const M = pts.length * 12, HW = 17;
+  const pos = [], idx = [], uv = [];
+  for (let i = 0; i <= M; i++) {
+    const t = i / M, c = curve.getPoint(t), tan = curve.getTangent(t);
+    const nx = -tan.z, nz = tan.x, L = Math.hypot(nx, nz) || 1;
+    const wob = HW * (0.85 + 0.15 * Math.sin(t * 40));        // gently varying width
+    for (const s of [-1, 1]) {
+      const x = c.x + (nx / L) * s * wob, z = c.z + (nz / L) * s * wob;
+      pos.push(x, terrainHeight(x, z) + 0.04, z);             // sits just on the ground surface
+      uv.push(s < 0 ? 0 : 1, t);
+    }
+  }
+  for (let i = 0; i < M; i++) {
+    const a = i * 2;
+    idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx); g.computeVertexNormals();
+  const m = new THREE.Mesh(g, toonMat(0x3f86c9, { side: THREE.DoubleSide }));
+  m.receiveShadow = true;
+  scene.add(m);
+}
+
 // A grass collar hugging the road on both sides — generated from the exact surface
 // function at fine resolution, so the land always meets the track edge, everywhere.
 function apronStrip(side, env) {
@@ -881,6 +965,12 @@ function buildEnvironment(def, env) {
 
   if (env.scatter === 'trees') {
     buildForest(env, scatterPos, outlineInstanced);
+  } else if (env.scatter === 'countryside') {
+    // composite rural scene: patchwork fields, forest, scattered farms, and the river
+    buildFields(scatterPos);
+    buildForest(env, scatterPos, outlineInstanced);
+    buildFarms(scatterPos);
+    if (def.river) buildRiver(def.river);
   } else if (env.scatter === 'rocks') {
     const geoRock = new THREE.DodecahedronGeometry(2.4, 0);
     const mRock = toonMat(0xb08a52);
