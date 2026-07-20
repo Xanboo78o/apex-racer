@@ -1501,16 +1501,32 @@ function renderDiag() {
       + 'font:12px/1.4 monospace;padding:8px 10px;border:1px solid #0a0;border-radius:6px;white-space:pre;pointer-events:none;max-width:90vw';
     document.body.appendChild(_diagEl);
   }
+  // rolling FPS over ~0.5s (performance.now is allowed in the browser)
+  const t = performance.now();
+  DIAG._fc = (DIAG._fc || 0) + 1;
+  if (DIAG._ft === undefined) DIAG._ft = t;
+  if (t - DIAG._ft >= 500) { DIAG.fps = Math.round(DIAG._fc * 1000 / (t - DIAG._ft)); DIAG._fc = 0; DIAG._ft = t; }
+  const fps = DIAG.fps || 0;
+
   const src = (document.querySelector('script[src*="main.js"]') || {}).src || '';
   const ver = (src.match(/v=(\d+)/) || [])[1] || '?';
   const spd = player ? Math.round(Math.hypot(player.velX, player.velZ) * 3.6 * SPEED_DISPLAY_SCALE) : '-';
+
+  // plain-English self-diagnosis
+  let verdict, vcolor;
+  if (fps > 0 && fps < 20) { verdict = `⚠ RUNNING SLOW — ${fps} FPS. Click this window to focus it!`; vcolor = '#f66'; }
+  else if (state === 'countdown') { verdict = 'countdown… (waiting for GO)'; vcolor = '#fd6'; }
+  else if (state !== 'race' && state !== 'tt') { verdict = 'not racing (state=' + state + ')'; vcolor = '#fd6'; }
+  else if ((DIAG.thr || 0) > 0.5 && spd < 8) { verdict = '⚠ throttle ON but not moving — screenshot this'; vcolor = '#f66'; }
+  else { verdict = `OK — ${fps} FPS`; vcolor = '#6f6'; }
+
   _diagEl.innerHTML =
-    `BUILD v=${ver} · ${state}\n`
+    `BUILD v=${ver}\n`
+    + `<b style="font-size:16px;color:${vcolor}">${verdict}</b>\n`
     + `<b style="font-size:20px;color:#ffd23e">throttle=${(DIAG.thr || 0).toFixed(2)}  brake=${(DIAG.brk || 0).toFixed(2)}</b>\n`
-    + `<b style="font-size:20px;color:#6cf">SPEED=${spd}</b>\n`
-    + `mThrottle=${mouseThrottle ? 1 : 0}  mBrake=${mouseBrake ? 1 : 0}  keyW=${keys['w'] ? 1 : 0}\n`
-    + `throttlePedal=${(throttlePedal || 0).toFixed(2)}  dt=${DIAG.dt}  frames=${DIAG.frames}\n`
-    + `events=${DIAG.n}\nlast: ${DIAG.last}`;
+    + `<b style="font-size:20px;color:#6cf">SPEED=${spd}  FPS=${fps}</b>\n`
+    + `state=${state}  mThrottle=${mouseThrottle ? 1 : 0}  keyW=${keys['w'] ? 1 : 0}\n`
+    + `throttlePedal=${(throttlePedal || 0).toFixed(2)}  dt=${DIAG.dt}  frames=${DIAG.frames}`;
 }
 function loop() {
   requestAnimationFrame(loop);
