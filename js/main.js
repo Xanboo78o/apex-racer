@@ -160,25 +160,33 @@ function boot() {
     if (e.code === 'Space') keys[' '] = false;
   });
   // click / press-and-hold = throttle (left button = gas, right button = brake).
-  // Held state is a simple boolean set on press, cleared on release. setPointerCapture GUARANTEES
-  // the matching pointerup reaches us (even released off-window), so a pedal can't get stuck on.
-  // NOTE: we do NOT re-read e.buttons on pointermove — some remote/tunnel setups report buttons:0
-  // on move while a button is still held, which would wrongly cut the throttle mid-drive.
+  // Held state is a simple boolean set on press, cleared on release.
+  // CRITICAL: capture on a STABLE element (documentElement), NOT e.target. Capturing on the
+  // clicked element meant that if you pressed the gas over the countdown "3/2/1" number or any
+  // HUD overlay that hides mid-race, the browser fired lostpointercapture the moment that element
+  // vanished and CUT the throttle — the "stuck at 4mph, release goes reverse" bug. documentElement
+  // never disappears, so capture (which guarantees we still get pointerup even released off-window)
+  // holds for the whole drive. We do NOT re-read e.buttons on pointermove — some remote/tunnel
+  // setups report buttons:0 on move while a button is still held, which would wrongly cut throttle.
+  const capId = { v: null };
   addEventListener('pointerdown', e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
-    try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
+    try { document.documentElement.setPointerCapture(e.pointerId); capId.v = e.pointerId; } catch (_) {}
     if (e.button === 0) mouseThrottle = true;
     else if (e.button === 2) mouseBrake = true;
   });
   addEventListener('pointerup', e => {
     if (e.button === 0 || !(e.buttons & 1)) mouseThrottle = false;   // left released (or no longer held)
     if (e.button === 2 || !(e.buttons & 2)) mouseBrake = false;      // right released
+    if (!mouseThrottle && !mouseBrake && capId.v !== null) {
+      try { document.documentElement.releasePointerCapture(capId.v); } catch (_) {}
+      capId.v = null;
+    }
   });
-  addEventListener('pointercancel', () => { mouseThrottle = mouseBrake = false; });
-  addEventListener('lostpointercapture', () => { mouseThrottle = mouseBrake = false; });
-  addEventListener('blur', () => { mouseThrottle = mouseBrake = false; });   // focus lost -> release pedals
-  document.addEventListener('visibilitychange', () => { if (document.hidden) mouseThrottle = mouseBrake = false; });
+  addEventListener('pointercancel', () => { mouseThrottle = mouseBrake = false; capId.v = null; });
+  addEventListener('blur', () => { mouseThrottle = mouseBrake = false; capId.v = null; });   // focus lost -> release pedals
+  document.addEventListener('visibilitychange', () => { if (document.hidden) { mouseThrottle = mouseBrake = false; capId.v = null; } });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
   updateInvertBtn();
   startAccountFlow(() => buildMenu());
