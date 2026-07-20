@@ -162,26 +162,30 @@ function boot() {
     if (e.code === 'Space') keys[' '] = false;
   });
   // click / press-and-hold = throttle (left button = gas, right button = brake).
-  // Held state is set on DISCRETE pointerdown and cleared on DISCRETE pointerup, matched by
-  // e.button. Two hard rules, each learned from a real stuck-pedal bug:
-  //   1. NEVER read e.buttons on pointermove. On this user's setup pointermove reports
-  //      buttons:0 while the button is still physically held, so deriving state from it cut
-  //      the throttle the instant the mouse moved ("can't accel past ~4mph").
-  //   2. NO setPointerCapture. On some browsers capture SWALLOWS the pointerup, so releasing
-  //      never registered and the throttle stuck ON. Plain in-window pointerup is reliable.
-  // Off-window / focus-loss releases are covered by the safety nets below (blur / leave /
-  // hidden / cancel) — none of which read the flaky buttons field.
-  const releasePedals = () => { mouseThrottle = mouseBrake = false; };
+  // The pedal is a SECOND mouse the user clicks as a foot-pedal. Some such devices fire a
+  // pointerdown on press but a flaky/odd pointerup on release (or none) — matching an exact
+  // e.button===0 on the up event missed it and the throttle latched ON ("kept going after
+  // I let go"). So RELEASE is driven by the e.buttons bitmask (which buttons are still held)
+  // on every pointer event: the instant the left bit clears, the gas lets off — regardless of
+  // which button number the device reports. `pedalArmed` gates it so a click that STARTS on a
+  // UI control doesn't rev. (The old "buttons:0 while held" worry was a past Cloudflare-tunnel
+  // quirk, not these mice — confirmed: the pedal holds throttle fine while pressed.)
+  let pedalArmed = false;
+  const syncPedals = e => {
+    mouseThrottle = pedalArmed && !!(e.buttons & 1);   // bit0 = left/primary
+    mouseBrake    = pedalArmed && !!(e.buttons & 2);   // bit1 = right/secondary
+  };
+  const releasePedals = () => { mouseThrottle = mouseBrake = false; pedalArmed = false; };
   addEventListener('pointerdown', e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
-    if (e.button === 0) mouseThrottle = true;                // left = gas
-    else if (e.button === 2) mouseBrake = true;              // right = brake
+    pedalArmed = true;
+    syncPedals(e);
   });
-  addEventListener('pointerup', e => {
-    if (e.button === 0) mouseThrottle = false;
-    else if (e.button === 2) mouseBrake = false;
-  });
+  addEventListener('pointermove', e => { if (pedalArmed) syncPedals(e); });   // catch a release we can see via buttons
+  addEventListener('pointerup',   e => { syncPedals(e); if (!(e.buttons & 3)) pedalArmed = false; });
+  // legacy mouse events too — a device with flaky Pointer Events may still deliver these
+  addEventListener('mouseup',     e => { if (!(e.buttons & 1)) mouseThrottle = false; if (!(e.buttons & 2)) mouseBrake = false; });
   addEventListener('pointercancel', releasePedals);
   addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
   // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
