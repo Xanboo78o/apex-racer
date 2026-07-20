@@ -197,8 +197,11 @@ function boot() {
     addEventListener(t, e => {
       if (t === 'pointermove' && !(e.buttons & 3)) return;   // only log moves while a button is held
       DIAG.n++;
-      DIAG.last = `${t} btn=${e.button ?? '-'} bts=${e.buttons ?? '-'} tt=${(e.target && e.target.tagName) || '?'}`;
+      DIAG.last = `${t} btn=${e.button ?? '-'} bts=${e.buttons ?? '-'} pt=${e.pointerType || '-'} tt=${(e.target && e.target.tagName) || '?'}`;
     }, true));
+  // also capture keyboard — a "pedal" device may actually emit a key, not a mouse click
+  ['keydown', 'keyup'].forEach(t =>
+    addEventListener(t, e => { DIAG.n++; DIAG.last = `${t} key="${e.key}" code=${e.code}`; }, true));
   updateInvertBtn();
   startAccountFlow(() => buildMenu());
   requestAnimationFrame(loop);
