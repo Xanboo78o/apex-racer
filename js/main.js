@@ -1414,6 +1414,10 @@ function aiInputs(car) {
   let vTarget = vmax[(car.idx + 2) % N];
   for (let l = 3; l <= look; l++) vTarget = Math.min(vTarget, vmax[(car.idx + l) % N]);
   vTarget *= car.skill;
+  // corner confidence: >1 => they don't brake enough for the corner and run wide (dumb bots hit
+  // walls); ~1 => they respect the braking profile (aces brake properly). Only bites in corners,
+  // because on straights the top-speed cap below clamps it anyway.
+  vTarget *= (car.cornerConf || 1);
   if (car.vCap) vTarget = Math.min(vTarget, car.vCap);   // personal top-speed limiter (straights)
 
   let throttle = 0, brake = 0;
@@ -1487,33 +1491,43 @@ function startGame(def, m) {
 
   cars = [];
   const nAI = mode === 'race' ? 11 : 0;              // 11 AI + you = 12 drivers
-  // top-speed tiers (shown speed): 3 front-runners top 195-200 (mostly 195), the rest 185-190.
-  const fastCount = 3;
-  const order = Array.from({ length: nAI }, (_, i) => i);
-  for (let k = order.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [order[k], order[j]] = [order[j], order[k]]; }
-  const fastSet = new Set(order.slice(0, fastCount));
+  // AI personalities. cap = top-speed band (shown km/h); corner = how much they OVER-drive corner
+  // speed (>1 = don't brake enough -> run wide into walls); wob/jit = line/steer sloppiness.
+  const PERSONAS = {
+    ace:   { capLo: 190, capHi: 196, skill: 1.00, engine: 1.04, corner: 1.00, wob: 0.06, jit: 0.028 },
+    mid:   { capLo: 175, capHi: 185, skill: 0.97, engine: 0.99, corner: 1.04, wob: 0.12, jit: 0.045 },
+    slow:  { capLo: 156, capHi: 164, skill: 0.95, engine: 0.94, corner: 1.02, wob: 0.11, jit: 0.045 },
+    dumb:  { capLo: 172, capHi: 190, skill: 0.92, engine: 0.99, corner: 1.45, wob: 0.26, jit: 0.10 },
+    versta:{ capLo: 226, capHi: 234, skill: 1.08, engine: 1.48, corner: 0.98, wob: 0.04, jit: 0.02 },
+  };
+  // roster of 11: a couple aces, some mid, a couple slow, a handful of dumb
+  let roster = ['ace', 'ace', 'mid', 'mid', 'mid', 'slow', 'slow', 'dumb', 'dumb', 'dumb', 'dumb'];
+  for (let k = roster.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [roster[k], roster[j]] = [roster[j], roster[k]]; }
+  const verstappen = Math.random() < 0.2;            // ~1 in 5 games: a cruising monster shows up
+  if (verstappen) roster[0] = 'versta';
   for (let i = 0; i < nAI; i++) {
-    const c = makeCar(CAR_COLORS[(i + 1) % CAR_COLORS.length], false, AI_NAMES[i % AI_NAMES.length], HELMET_COLORS[(i + 1) % HELMET_COLORS.length], VEHICLES[Math.floor(Math.random() * VEHICLES.length)]);
-    const fast = fastSet.has(i);
-    c.skill = (fast ? 0.99 + Math.random() * 0.02 : 0.95 + Math.random() * 0.035) * (hardMode ? 1.02 : 1);
-    // fluctuating top-speed limiter, in shown units
-    c.topLo = fast ? 195 : 185;
-    c.topHi = fast ? 200 : 190;
-    c.topBias = fast ? 1 : 0;                          // fast tier skews toward the low end (195)
-    c.engineMul = fast ? 1.06 : 1;                     // enough grunt for the fast tier to actually reach ~200
-    c.topW = 0.22 + Math.random() * 0.16;              // slow breathing, each bot out of phase
+    const key = roster[i], P = PERSONAS[key], isV = key === 'versta';
+    const name = isV ? 'Verstappen' : AI_NAMES[i % AI_NAMES.length];
+    const color = isV ? 0xff7a1a : CAR_COLORS[(i + 1) % CAR_COLORS.length];
+    const helmet = isV ? 0x14274a : HELMET_COLORS[(i + 1) % HELMET_COLORS.length];
+    const veh = isV ? 'f1' : VEHICLES[Math.floor(Math.random() * VEHICLES.length)];
+    const c = makeCar(color, false, name, helmet, veh);
+    c.persona = key;
+    c.skill = P.skill * (hardMode ? 1.02 : 1);
+    c.topLo = P.capLo; c.topHi = P.capHi; c.topBias = 0;
+    c.engineMul = P.engine;
+    c.cornerConf = P.corner + (key === 'dumb' ? Math.random() * 0.2 : 0);   // dumb varies: some wilder
+    c.topW = 0.22 + Math.random() * 0.16;             // slow top-speed breathing, out of phase
     c.topPhase = Math.random() * Math.PI * 2;
-    // distinct personal line per bot: spread across the width, evenly-ish, with a little jitter
     c.lineBias = THREE.MathUtils.clamp((nAI > 1 ? -0.7 + i * (1.4 / (nAI - 1)) : 0) + (Math.random() - 0.5) * 0.25, -0.8, 0.8);
-    // per-bot line wobble (fraction of half-width): a slow drift + a faster shimmy, out of
-    // phase per car. Fast/skilled bots wobble a touch less (tidier); all fight the car more in corners.
-    c.wAmp = (fast ? 0.09 : 0.15) + Math.random() * 0.06;
-    c.wW1 = 0.5 + Math.random() * 0.6;   c.wP1 = Math.random() * Math.PI * 2;   // slow weave
-    c.wW2 = 1.7 + Math.random() * 1.4;   c.wP2 = Math.random() * Math.PI * 2;   // faster shimmy
-    c.wJit = (fast ? 0.03 : 0.05) + Math.random() * 0.03;                       // steering imperfection
+    c.wAmp = P.wob + Math.random() * 0.03;            // line wander (dumb = wide, ace = tidy)
+    c.wW1 = 0.5 + Math.random() * 0.6;   c.wP1 = Math.random() * Math.PI * 2;
+    c.wW2 = 1.7 + Math.random() * 1.4;   c.wP2 = Math.random() * Math.PI * 2;
+    c.wJit = P.jit + Math.random() * 0.02;            // steering imperfection
     c.wJW = 3.0 + Math.random() * 2.5;   c.wJP = Math.random() * Math.PI * 2;
     cars.push(c);
   }
+  if (verstappen) toast('⚠ Verstappen has entered the race');
   player = makeCar(CAR_COLORS[0], true, 'You', HELMET_COLORS[0], playerVehicle);
   cars.push(player);
 
