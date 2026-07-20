@@ -984,6 +984,9 @@ function makeCar(color, isPlayer, name, helmet) {
     finished: false, finishTime: null,
     laneVar: 0, skill: 1, slip: 0, onRoad: true,
     lineBias: 0,                                // personal line offset (fraction of half-width)
+    // per-bot line "wobble": slow weave + faster shimmy + steering imperfection, so bots
+    // wander around their line and fight the car like real drivers instead of railing it.
+    wAmp: 0, wW1: 0, wW2: 0, wP1: 0, wP2: 0, wJit: 0, wJW: 0, wJP: 0, steerSm: 0,
     engineMul: 1,                               // per-car engine scale (fast bots get a little more)
     // per-bot fluctuating top-speed limiter (shown-speed band); vCap is the live world-m/s cap
     vCap: 0, topLo: 0, topHi: 0, topBias: 0, topW: 0, topPhase: 0,
@@ -1127,13 +1130,22 @@ function aiInputs(car) {
   // personal cruising line: each bot sits a bit off the ideal line (staggered), then laneVar
   // adds dynamic overtaking movement on top. Clamp so the sum always stays on the road.
   const biasOff = car.lineBias * track.halfW * 0.42;
-  const off = THREE.MathUtils.clamp(raceOffset[si] + biasOff + car.laneVar, -track.halfW * 0.85, track.halfW * 0.85);
+  // line wobble: slow weave + faster shimmy (in metres). Bots wander around their line
+  // rather than railing it, so the field looks alive.
+  const wob = (Math.sin(raceTime * car.wW1 + car.wP1) + 0.5 * Math.sin(raceTime * car.wW2 + car.wP2))
+              * car.wAmp * track.halfW * 0.66;
+  const off = THREE.MathUtils.clamp(raceOffset[si] + biasOff + car.laneVar + wob, -track.halfW * 0.85, track.halfW * 0.85);
   const tx = samples[si].x + rights[si].x * off;
   const tz = samples[si].z + rights[si].z * off;
   let err = Math.atan2(tx - car.x, tz - car.z) - car.heading;
   while (err > Math.PI) err -= 2 * Math.PI;
   while (err < -Math.PI) err += 2 * Math.PI;
-  const steer = THREE.MathUtils.clamp(err * 2.6, -1, 1);
+  // steering imperfection: a small hand-jitter, plus a touch of reaction lag / slight
+  // over-correction (steerSm chases the target and can overshoot) => a realistic wobble.
+  const jitter = Math.sin(raceTime * car.wJW + car.wJP) * car.wJit;
+  const rawSteer = THREE.MathUtils.clamp(err * 2.6 + jitter, -1, 1);
+  car.steerSm += (rawSteer - car.steerSm) * 0.35;   // lag + overshoot -> natural weave
+  const steer = THREE.MathUtils.clamp(car.steerSm, -1, 1);
 
   // speed: the vmax profile already bakes in braking zones (backward pass), so just follow
   // it a hair ahead — don't crawl to the corner speed 90m early.
@@ -1232,6 +1244,13 @@ function startGame(def, m) {
     c.topPhase = Math.random() * Math.PI * 2;
     // distinct personal line per bot: spread across the width, evenly-ish, with a little jitter
     c.lineBias = THREE.MathUtils.clamp((nAI > 1 ? -0.7 + i * (1.4 / (nAI - 1)) : 0) + (Math.random() - 0.5) * 0.25, -0.8, 0.8);
+    // per-bot line wobble (fraction of half-width): a slow drift + a faster shimmy, out of
+    // phase per car. Fast/skilled bots wobble a touch less (tidier); all fight the car more in corners.
+    c.wAmp = (fast ? 0.09 : 0.15) + Math.random() * 0.06;
+    c.wW1 = 0.5 + Math.random() * 0.6;   c.wP1 = Math.random() * Math.PI * 2;   // slow weave
+    c.wW2 = 1.7 + Math.random() * 1.4;   c.wP2 = Math.random() * Math.PI * 2;   // faster shimmy
+    c.wJit = (fast ? 0.03 : 0.05) + Math.random() * 0.03;                       // steering imperfection
+    c.wJW = 3.0 + Math.random() * 2.5;   c.wJP = Math.random() * Math.PI * 2;
     cars.push(c);
   }
   player = makeCar(CAR_COLORS[0], true, 'You', HELMET_COLORS[0]);
@@ -1328,6 +1347,13 @@ function onLapComplete(car) {
 
 // ---------------------------------------------------------------- audio
 const audio = {};
+// tanh-ish saturation curve — adds the combustion grit/exhaust rasp that makes a
+// synth engine read as a real one instead of a buzz. Built once.
+function makeDriveCurve(amount) {
+  const n = 1024, curve = new Float32Array(n), k = amount;
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; curve[i] = Math.tanh(k * x) / Math.tanh(k); }
+  return curve;
+}
 function initAudio() {
   if (audio.ctx) return;
   try {
@@ -1335,33 +1361,82 @@ function initAudio() {
     const master = ctx.createGain();
     master.gain.value = muted ? 0 : 0.5;
     master.connect(ctx.destination);
-    const eng = ctx.createOscillator(); eng.type = 'sawtooth';
-    const eng2 = ctx.createOscillator(); eng2.type = 'square';
+
+    // ---- engine: a stack of harmonically-related oscillators feeding a drive/saturation
+    // stage, a resonant lowpass whose cutoff opens with rpm+load, then a firing-rate
+    // tremolo (the lumpy growl). Detune between the two saws gives an engine's rough beat.
+    const engMix = ctx.createGain(); engMix.gain.value = 1;
+    const sub   = ctx.createOscillator(); sub.type   = 'sawtooth';           // low block rumble (0.5x)
+    const eng   = ctx.createOscillator(); eng.type   = 'sawtooth';           // fundamental firing
+    const eng2  = ctx.createOscillator(); eng2.type  = 'sawtooth'; eng2.detune.value = 11; // beat/rough
+    const harm  = ctx.createOscillator(); harm.type  = 'square';             // 2x metallic body
+    const harm3 = ctx.createOscillator(); harm3.type = 'sawtooth';           // 3x exhaust wail
+    const gSub = ctx.createGain();  gSub.gain.value  = 0.55;
+    const gEng = ctx.createGain();  gEng.gain.value  = 0.6;
+    const gEng2= ctx.createGain();  gEng2.gain.value = 0.5;
+    const gHarm= ctx.createGain();  gHarm.gain.value = 0.16;
+    const gH3  = ctx.createGain();  gH3.gain.value   = 0.05;                 // rises with throttle
+    sub.connect(gSub);  eng.connect(gEng); eng2.connect(gEng2); harm.connect(gHarm); harm3.connect(gH3);
+    gSub.connect(engMix); gEng.connect(engMix); gEng2.connect(engMix); gHarm.connect(engMix); gH3.connect(engMix);
+
+    const shaper = ctx.createWaveShaper(); shaper.curve = makeDriveCurve(2.2); shaper.oversample = '2x';
+    const filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 700; filt.Q.value = 1.1;
+    const trem = ctx.createGain(); trem.gain.value = 1;          // firing-pulse growl multiplies here
     const engGain = ctx.createGain(); engGain.gain.value = 0;
-    const filt = ctx.createBiquadFilter(); filt.type = 'lowpass'; filt.frequency.value = 900;
-    eng.connect(engGain); eng2.connect(engGain);
-    engGain.connect(filt); filt.connect(master);
-    eng.start(); eng2.start();
+    engMix.connect(shaper); shaper.connect(filt); filt.connect(trem); trem.connect(engGain); engGain.connect(master);
+
+    // firing-rate LFO -> tremolo depth. Real engines are "lumpy" at idle, smooth at high rpm.
+    const lfo = ctx.createOscillator(); lfo.type = 'triangle'; lfo.frequency.value = 30;
+    const lfoDepth = ctx.createGain(); lfoDepth.gain.value = 0.18;
+    lfo.connect(lfoDepth); lfoDepth.connect(trem.gain);
+
+    [sub, eng, eng2, harm, harm3, lfo].forEach(o => o.start());
+
+    // ---- broadband noise: intake roar (rises with load) + reused for tyre skid
     const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
     const noise = ctx.createBufferSource(); noise.buffer = buf; noise.loop = true;
-    const nFilt = ctx.createBiquadFilter(); nFilt.type = 'bandpass'; nFilt.frequency.value = 600;
+    // intake
+    const inFilt = ctx.createBiquadFilter(); inFilt.type = 'bandpass'; inFilt.frequency.value = 480; inFilt.Q.value = 0.7;
+    const inGain = ctx.createGain(); inGain.gain.value = 0;
+    noise.connect(inFilt); inFilt.connect(inGain); inGain.connect(master);
+    // tyre skid
+    const nFilt = ctx.createBiquadFilter(); nFilt.type = 'bandpass'; nFilt.frequency.value = 900; nFilt.Q.value = 0.9;
     const nGain = ctx.createGain(); nGain.gain.value = 0;
     noise.connect(nFilt); nFilt.connect(nGain); nGain.connect(master);
     noise.start();
-    Object.assign(audio, { ctx, master, eng, eng2, engGain, nGain });
+
+    Object.assign(audio, { ctx, master, sub, eng, eng2, harm, harm3, gH3, gHarm, filt, trem, lfo, lfoDepth, engGain, inGain, inFilt, nGain });
   } catch (e) { /* no audio */ }
 }
 function updateAudio(dt) {
   if (!audio.ctx || !player) return;
   const active = state === 'race' || state === 'tt' || state === 'countdown';
   const speed = Math.hypot(player.velX, player.velZ);
-  const revs = 55 + speed * 3.4 + (keys['w'] ? 25 : 0);
-  audio.eng.frequency.value = revs;
-  audio.eng2.frequency.value = revs * 1.5;
-  audio.engGain.gain.value = active ? 0.1 + Math.min(speed / 300, 0.06) : 0;
-  audio.nGain.gain.value = active && player.slip > 5 && player.onRoad ? Math.min((player.slip - 5) / 40, 0.16) : 0;
+  const thr = Math.max(keys['w'] ? 1 : 0, throttlePedal || 0);   // 0..1 load
+  // rpm-ish fundamental: idle ~46Hz, climbs with speed; throttle adds a little "pull"
+  const f = 46 + speed * 3.1 + thr * 22;
+  const g = (o, v) => { if (o) o.frequency.setTargetAtTime(v, audio.ctx.currentTime, 0.03); };
+  g(audio.sub,   f * 0.5);
+  g(audio.eng,   f);
+  g(audio.eng2,  f);
+  g(audio.harm,  f * 2);
+  g(audio.harm3, f * 3);
+  audio.eng2.detune.value = 9 + speed * 0.12;                    // beat widens with revs
+  // firing pulses track rpm; the growl is deep at idle and fades out up top
+  const firing = Math.max(24, f * 1.05);
+  audio.lfo.frequency.setTargetAtTime(firing, audio.ctx.currentTime, 0.05);
+  audio.lfoDepth.gain.value = Math.max(0.02, 0.22 - speed * 0.0016);
+  // brightness opens with rpm AND throttle (load) — the on-throttle "snarl"
+  audio.filt.frequency.setTargetAtTime(500 + speed * 22 + thr * 900, audio.ctx.currentTime, 0.04);
+  audio.gH3.gain.setTargetAtTime(0.04 + thr * 0.14, audio.ctx.currentTime, 0.05);   // exhaust wail under power
+  audio.engGain.gain.setTargetAtTime(active ? 0.16 + Math.min(speed / 260, 0.1) : 0, audio.ctx.currentTime, 0.05);
+  // intake roar: louder with speed & throttle
+  audio.inFilt.frequency.value = 380 + speed * 6;
+  audio.inGain.gain.setTargetAtTime(active ? Math.min(speed / 900, 0.05) + thr * 0.03 : 0, audio.ctx.currentTime, 0.06);
+  // tyre scrub
+  audio.nGain.gain.setTargetAtTime(active && player.slip > 5 && player.onRoad ? Math.min((player.slip - 5) / 40, 0.16) : 0, audio.ctx.currentTime, 0.03);
 }
 
 // ---------------------------------------------------------------- minimap
