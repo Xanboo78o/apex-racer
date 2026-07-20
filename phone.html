@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0b0d10">
+<title>Apex Racer — Phone Wheel</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; background: #0b0d10; color: #f2f2f2; font-family: 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+  #app { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; text-align: center; gap: 10px; overflow-y: auto; }
+  /* Require landscape */
+  #rotateNotice {
+    display: none; position: fixed; inset: 0; z-index: 100;
+    flex-direction: column; align-items: center; justify-content: center; gap: 18px;
+    background: #0b0d10; text-align: center; padding: 24px;
+  }
+  #rotateNotice .icon { font-size: 64px; animation: spin 2.2s ease-in-out infinite; }
+  @keyframes spin { 0%,60%{transform:rotate(0)} 80%,100%{transform:rotate(90deg)} }
+  @media (orientation: portrait) { #rotateNotice { display: flex; } #app { display: none; } }
+  h1 { font-size: 30px; font-weight: 900; letter-spacing: 3px; }
+  h1 span { color: #e23b2e; }
+  .muted { opacity: .6; font-size: 14px; }
+  input {
+    font-size: 30px; font-weight: 800; letter-spacing: 8px; text-align: center; text-transform: uppercase;
+    width: 100%; max-width: 320px; padding: 14px; border-radius: 12px; border: 2px solid #333;
+    background: #14171c; color: #fff; outline: none;
+  }
+  input:focus { border-color: #2f6fe0; }
+  button {
+    font-family: inherit; font-size: 18px; font-weight: 700; cursor: pointer; color: #fff;
+    background: #e23b2e; border: none; border-radius: 12px; padding: 15px 26px; width: 100%; max-width: 320px;
+  }
+  button.sec { background: #2b3038; font-size: 15px; padding: 12px; }
+  button:active { transform: scale(.97); }
+  .hidden { display: none !important; }
+  #wheel { width: min(46vh, 300px); height: auto; transition: transform .05s linear; }
+  #status { font-size: 15px; font-weight: 600; padding: 7px 16px; border-radius: 20px; background: #1a1e24; }
+  #status.ok { background: #16351f; color: #7ee59a; }
+  #status.err { background: #3a1a1a; color: #f0a0a0; }
+  .bar { width: 74vw; max-width: 340px; height: 10px; background: #1a1e24; border-radius: 5px; position: relative; overflow: hidden; }
+  .bar .fill { position: absolute; top: 0; bottom: 0; left: 50%; background: #2f6fe0; width: 0; }
+  .row { display: flex; gap: 10px; width: 74vw; max-width: 340px; }
+  .row button { flex: 1; }
+  .ctrl { width: 74vw; max-width: 340px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; text-align: left; opacity: .85; }
+  .ctrl label { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  input[type=range] { width: 60%; }
+  select { background: #14171c; color: #fff; border: 1px solid #333; border-radius: 8px; padding: 6px; font-size: 13px; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { font-size: 13px; padding: 8px; background: #2b3038; }
+  .seg button.active { background: #2f6fe0; }
+</style>
+</head>
+<body>
+
+<div id="rotateNotice">
+  <div class="icon">📱</div>
+  <h1>Turn sideways</h1>
+  <p class="muted">Apex Wheel works in landscape. Rotate your phone to drive.</p>
+</div>
+
+<div id="app">
+
+  <!-- Step 1: connect -->
+  <div id="connectView">
+    <h1>APEX<span>WHEEL</span></h1>
+    <p class="muted">Enter the code shown on your game screen.</p>
+    <input id="code" maxlength="6" placeholder="CODE" autocomplete="off" autocapitalize="characters" inputmode="text">
+    <button id="connectBtn">Pair &amp; Enable Motion</button>
+    <p class="muted" id="connErr"></p>
+  </div>
+
+  <!-- Step 2: driving -->
+  <div id="driveView" class="hidden">
+    <div id="status">Connecting…</div>
+    <svg id="wheel" viewBox="0 0 200 200">
+      <circle cx="100" cy="100" r="92" fill="none" stroke="#16181c" stroke-width="16"/>
+      <circle cx="100" cy="100" r="92" fill="none" stroke="#2b2f36" stroke-width="12"/>
+      <circle cx="100" cy="100" r="26" fill="#16181c" stroke="#2b2f36" stroke-width="4"/>
+      <rect x="94" y="100" width="12" height="70" rx="4" fill="#2b2f36"/>
+      <rect x="30" y="94" width="70" height="12" rx="4" fill="#2b2f36"/>
+      <rect x="100" y="94" width="70" height="12" rx="4" fill="#2b2f36"/>
+      <circle cx="100" cy="100" r="10" fill="#e23b2e"/>
+      <rect x="86" y="16" width="28" height="14" rx="7" fill="#e23b2e"/>
+    </svg>
+    <div class="bar"><div class="fill" id="steerFill"></div></div>
+    <div class="row">
+      <button class="sec" id="calibBtn">Center / Calibrate</button>
+      <button class="sec" id="discBtn">Disconnect</button>
+    </div>
+    <div class="ctrl">
+      <label>Sensitivity <input type="range" id="sens" min="10" max="70" value="28"></label>
+      <label>Invert <input type="checkbox" id="invert"></label>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/phone.js"></script>
+</body>
+</html>

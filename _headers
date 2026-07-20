@@ -1,0 +1,2 @@
+/*
+  Permissions-Policy: accelerometer=(self), gyroscope=(self), magnetometer=(self)

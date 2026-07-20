@@ -1,0 +1,10 @@
+{
+  "name": "apex-racer",
+  "version": "1.0.0",
+  "description": "3D low-poly keyboard racing game",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  }
+}

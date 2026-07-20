@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Apex Racer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="game"></div>
+
+<!-- Account creation (first visit only; saved to this device) -->
+<div id="accountScreen">
+  <div class="menuInner">
+    <h1>APEX<span>RACER</span></h1>
+    <p class="tagline">Create your driver profile</p>
+    <div class="acctBox">
+      <input id="usernameInput" maxlength="16" placeholder="Username" autocomplete="off">
+      <button onclick="submitAccount()">Create Account</button>
+      <p class="acctNote">Saved to this device — no password, no re-login. You'll get a code for pairing your phone.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Account chip (top-right on the menu) -->
+<div id="acctChip">
+  <span id="acctDot" class="dot off"></span>
+  <span class="acctText">👤 <b id="acctName"></b> &nbsp;·&nbsp; code <b id="acctCode"></b></span>
+  <button onclick="openPair()">📱 Pair Phone</button>
+</div>
+
+<!-- Pair modal -->
+<div id="pairModal">
+  <div class="panel">
+    <h2>Pair Your Phone</h2>
+    <p>Open this on your phone's browser:</p>
+    <div class="pairUrl" id="pairUrl"></div>
+    <img id="pairQR" alt="Scan to open on phone" width="180" height="180">
+    <p>Then enter your code:</p>
+    <div class="pairCode" id="pairCodeBig"></div>
+    <div class="pairStatus" id="pairStatus">Waiting for phone…</div>
+    <p class="acctNote">Hold the phone like a wheel and turn it to steer. Throttle/brake stay on W/S here.</p>
+    <button onclick="closePair()">Close</button>
+  </div>
+</div>
+
+<!-- HUD -->
+<div id="hud">
+  <div id="hudTop">
+    <div id="posBox">
+      <div id="position">P1</div>
+      <div id="lapCount">Lap 1 / 3</div>
+    </div>
+    <div id="trackLabel"></div>
+    <div id="timeBox">
+      <div id="curLap" class="big">0:00.000</div>
+      <div id="lastLap">Last --:--.---</div>
+      <div id="bestLap">Best --:--.---</div>
+    </div>
+  </div>
+  <div id="speedBox">
+    <span id="speed">0</span><span class="unit">km/h</span>
+  </div>
+  <canvas id="minimap" width="180" height="130"></canvas>
+  <div id="hint">W or click throttle&nbsp;·&nbsp;S or right-click brake&nbsp;·&nbsp;A/D or phone-wheel steer&nbsp;·&nbsp;Space handbrake&nbsp;·&nbsp;R reset&nbsp;·&nbsp;C camera&nbsp;·&nbsp;M mute&nbsp;·&nbsp;Esc pause</div>
+</div>
+
+<div id="toast"></div>
+<div id="countdown"></div>
+
+<!-- First-person cockpit overlay (shown only in Cockpit camera) -->
+<div id="fpOverlay">
+  <div class="vig"></div>
+  <svg id="fpWheel" viewBox="0 0 600 300" xmlns="http://www.w3.org/2000/svg">
+    <path d="M55 300 L55 150 Q55 88 128 78 L228 64 Q300 56 372 64 L472 78 Q545 88 545 150 L545 300 Z" fill="#16181c" stroke="#050506" stroke-width="4"/>
+    <path d="M128 84 Q300 60 472 84" fill="none" stroke="#3a3f47" stroke-width="6" stroke-linecap="round"/>
+    <rect x="216" y="90" width="168" height="15" rx="7" fill="#0a0c0f"/>
+    <circle cx="234" cy="97" r="4" fill="#22cc55"/><circle cx="256" cy="97" r="4" fill="#22cc55"/>
+    <circle cx="278" cy="97" r="4" fill="#e2c018"/><circle cx="300" cy="97" r="4" fill="#e2c018"/>
+    <circle cx="322" cy="97" r="4" fill="#e23b2e"/><circle cx="344" cy="97" r="4" fill="#e23b2e"/>
+    <circle cx="366" cy="97" r="4" fill="#9b30e0"/>
+    <rect x="234" y="112" width="132" height="66" rx="8" fill="#0b1a1e" stroke="#264047" stroke-width="2"/>
+    <text id="fpReadout" x="300" y="156" fill="#3fd6e6" font-size="34" text-anchor="middle" font-family="'Segoe UI',monospace" font-weight="700">0</text>
+    <path d="M55 152 Q26 162 30 214 L55 244 Z" fill="#0e0f12"/>
+    <path d="M545 152 Q574 162 570 214 L545 244 Z" fill="#0e0f12"/>
+    <circle cx="150" cy="150" r="12" fill="#e23b2e"/><circle cx="188" cy="138" r="9" fill="#2f6fe0"/>
+    <circle cx="450" cy="150" r="12" fill="#28b45a"/><circle cx="412" cy="138" r="9" fill="#e2c018"/>
+  </svg>
+</div>
+
+<!-- Menu -->
+<div id="menu">
+  <div class="menuInner">
+    <h1>APEX<span>RACER</span></h1>
+    <p class="tagline">Six circuits · rolling terrain · banked corners</p>
+    <div id="diffRow"><button id="hardBtn" onclick="toggleHard()">Difficulty: Normal</button></div>
+    <div id="trackGrid"></div>
+    <p class="footer">Keyboard: <b>W</b>/<b>S</b> throttle &amp; brake · <b>A</b>/<b>D</b> steer · pick <b>Race</b> for AI grid, <b>Time Trial</b> for the clock.</p>
+  </div>
+</div>
+
+<!-- Pause -->
+<div id="pause">
+  <div class="panel">
+    <h2>Paused</h2>
+    <button onclick="resumeGameBtn()">Resume</button>
+    <button id="invertBtn" onclick="toggleInvert()">Steering: Normal</button>
+    <button onclick="restartRace()">Restart</button>
+    <button onclick="backToMenu()">Quit to Menu</button>
+  </div>
+</div>
+
+<!-- Results -->
+<div id="results"></div>
+
+<script src="js/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+<script src="js/tracks.js"></script>
+<script src="js/pair.js"></script>
+<script src="js/main.js"></script>
+<script>window.resumeGameBtn = () => resumeGame();</script>
+</body>
+</html>

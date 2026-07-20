@@ -1,0 +1,9 @@
+# Static site — no build step. Serve the repo root as-is.
+[build]
+  publish = "."
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Permissions-Policy = "accelerometer=(self), gyroscope=(self), magnetometer=(self)"
