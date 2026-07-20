@@ -157,14 +157,22 @@ $('discBtn').addEventListener('click', () => {
 // ---------------------------------------------------------------- fullscreen
 async function goFullscreen() {
   const el = document.documentElement;
-  try {
-    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen;
-    if (req && !document.fullscreenElement) await req.call(el);
-  } catch (e) { /* iOS Safari: unsupported */ }
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+  const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+  if (fsEl) {                                   // already fullscreen -> toggle off
+    try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+    return;
+  }
+  if (!req) {                                   // iOS Safari has no page fullscreen API
+    setStatus('', 'For fullscreen on iPhone: tap Share ⬆ → “Add to Home Screen”, then open from that icon.');
+    return;
+  }
+  try { await req.call(el); }
+  catch (e) { setStatus('err', 'Fullscreen blocked — tap it again, or use Add to Home Screen.'); return; }
   try { if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape'); }
   catch (e) { /* lock needs fullscreen / unsupported — CSS portrait notice covers it */ }
 }
-$('fsBtn').addEventListener('click', goFullscreen);
+$('fsBtn').addEventListener('click', () => { goFullscreen(); });
 
 // ---------------------------------------------------------------- HUD from the game (minimap + speed)
 let trkBase = null, trkScale = null;   // offscreen track outline + its {s,ox,oz} transform

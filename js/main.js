@@ -8,6 +8,7 @@ const AI_NAMES = ['Vettori', 'Okonkwo', 'Larsson', 'Tanaka', 'Moreau', 'Novak', 
 const N_SAMPLES = 1400;
 const SUBSTEPS = 3;
 const SPEED_DISPLAY_SCALE = 0.45;   // the car really moves fast; show a friendlier number (~200 top)
+const COAST_BRAKE = 0.4;            // one-pedal: braking force applied when the player is off the gas
 
 // Terrain + banking tuning
 const BANK_GAIN = 18;               // curvature -> cross-slope; higher = more banked corners
@@ -64,7 +65,7 @@ let muted = false;
 let steerInvert = localStorage.getItem('apex_steerInvert') === '1';
 let mouseThrottle = false, mouseBrake = false;   // click-and-hold pedals (held state)
 let throttlePedal = 0, brakePedal = 0;           // analog pedal travel — eases in/out, not on/off
-const DIAG = { n: 0, last: '(no pointer events yet)' };   // TEMP diagnostic — remove after pedal confirmed
+const DIAG = { n: 0, last: '(no pointer events yet)', thr: 0, brk: 0 };   // TEMP diagnostic — remove after pedal confirmed
 // gyroSteer + phoneConnected live in pair.js (phone controller)
 let GRAD = null, OUTLINE_MAT = null;
 const keys = {};
@@ -1502,18 +1503,20 @@ function renderDiag() {
   }
   const src = (document.querySelector('script[src*="main.js"]') || {}).src || '';
   const ver = (src.match(/v=(\d+)/) || [])[1] || '?';
-  const spd = player ? Math.hypot(player.velX, player.velZ).toFixed(1) : '-';
-  _diagEl.textContent =
-    `BUILD v=${ver}\nstate=${state}\n`
-    + `mThrottle=${mouseThrottle ? 1 : 0}  mBrake=${mouseBrake ? 1 : 0}\n`
-    + `throttlePedal=${(throttlePedal || 0).toFixed(2)}  keyW=${keys['w'] ? 1 : 0}\n`
-    + `worldSpeed=${spd}\n`
+  const spd = player ? Math.round(Math.hypot(player.velX, player.velZ) * 3.6 * SPEED_DISPLAY_SCALE) : '-';
+  _diagEl.innerHTML =
+    `BUILD v=${ver} · ${state}\n`
+    + `<b style="font-size:20px;color:#ffd23e">throttle=${(DIAG.thr || 0).toFixed(2)}  brake=${(DIAG.brk || 0).toFixed(2)}</b>\n`
+    + `<b style="font-size:20px;color:#6cf">SPEED=${spd}</b>\n`
+    + `mThrottle=${mouseThrottle ? 1 : 0}  mBrake=${mouseBrake ? 1 : 0}  keyW=${keys['w'] ? 1 : 0}\n`
+    + `throttlePedal=${(throttlePedal || 0).toFixed(2)}  dt=${DIAG.dt}  frames=${DIAG.frames}\n`
     + `events=${DIAG.n}\nlast: ${DIAG.last}`;
 }
 function loop() {
   requestAnimationFrame(loop);
-  renderDiag();
   let dt = Math.min(clock.getDelta(), 0.05);
+  DIAG.dt = +dt.toFixed(4); DIAG.frames = (DIAG.frames || 0) + 1;
+  renderDiag();
 
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) $('toast').style.opacity = '0'; }
   if (state === 'menu' || state === 'paused' || !track) return;
@@ -1559,12 +1562,13 @@ function loop() {
       for (const car of cars) {
         let input;
         if (car.isPlayer) {
-          input = {
-            throttle: Math.max(kThr, throttlePedal),   // keyboard is instant; click pedal is analog
-            brake: Math.max(kBrk, brakePedal),
-            steer: playerSteer(),
-            handbrake: keys[' '] ? 1 : 0,
-          };
+          const thr = Math.max(kThr, throttlePedal);     // keyboard is instant; click pedal is analog
+          let brk = Math.max(kBrk, brakePedal);
+          // ONE-PEDAL feel: when you're not on the gas (and not already braking), coast-brake so
+          // lifting off actively slows the car like engine braking. COAST_BRAKE is tunable.
+          if (thr < 0.06 && brk < 0.06) brk = COAST_BRAKE;
+          input = { throttle: thr, brake: brk, steer: playerSteer(), handbrake: keys[' '] ? 1 : 0 };
+          DIAG.thr = thr; DIAG.brk = +brk.toFixed(2);
         } else if (car.finished) {
           input = aiInputs(car); input.throttle = Math.min(input.throttle, 0.4);
         } else {
