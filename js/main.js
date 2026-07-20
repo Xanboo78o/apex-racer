@@ -64,6 +64,7 @@ let muted = false;
 let steerInvert = localStorage.getItem('apex_steerInvert') === '1';
 let mouseThrottle = false, mouseBrake = false;   // click-and-hold pedals (held state)
 let throttlePedal = 0, brakePedal = 0;           // analog pedal travel — eases in/out, not on/off
+const DIAG = { n: 0, last: '(no pointer events yet)' };   // TEMP diagnostic — remove after pedal confirmed
 // gyroSteer + phoneConnected live in pair.js (phone controller)
 let GRAD = null, OUTLINE_MAT = null;
 const keys = {};
@@ -185,6 +186,14 @@ function boot() {
   addEventListener('blur', releasePedals);                  // focus lost -> release pedals
   document.addEventListener('visibilitychange', () => { if (document.hidden) releasePedals(); });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
+  // TEMP DIAGNOSTIC overlay — records raw pointer/mouse/touch events so we can see what THIS
+  // browser actually reports. Remove once the pedal is confirmed working.
+  ['pointerdown','pointerup','pointermove','mousedown','mouseup','touchstart','touchend'].forEach(t =>
+    addEventListener(t, e => {
+      if (t === 'pointermove' && !(e.buttons & 3)) return;   // only log moves while a button is held
+      DIAG.n++;
+      DIAG.last = `${t} btn=${e.button ?? '-'} bts=${e.buttons ?? '-'} tt=${(e.target && e.target.tagName) || '?'}`;
+    }, true));
   updateInvertBtn();
   startAccountFlow(() => buildMenu());
   requestAnimationFrame(loop);
@@ -1482,8 +1491,27 @@ function updateHUD() {
 }
 
 // ---------------------------------------------------------------- main loop
+let _diagEl = null;
+function renderDiag() {
+  if (!_diagEl) {
+    _diagEl = document.createElement('div');
+    _diagEl.style.cssText = 'position:fixed;top:6px;left:6px;z-index:9999;background:rgba(0,0,0,.82);color:#0f0;'
+      + 'font:12px/1.4 monospace;padding:8px 10px;border:1px solid #0a0;border-radius:6px;white-space:pre;pointer-events:none;max-width:90vw';
+    document.body.appendChild(_diagEl);
+  }
+  const src = (document.querySelector('script[src*="main.js"]') || {}).src || '';
+  const ver = (src.match(/v=(\d+)/) || [])[1] || '?';
+  const spd = player ? Math.hypot(player.velX, player.velZ).toFixed(1) : '-';
+  _diagEl.textContent =
+    `BUILD v=${ver}\nstate=${state}\n`
+    + `mThrottle=${mouseThrottle ? 1 : 0}  mBrake=${mouseBrake ? 1 : 0}\n`
+    + `throttlePedal=${(throttlePedal || 0).toFixed(2)}  keyW=${keys['w'] ? 1 : 0}\n`
+    + `worldSpeed=${spd}\n`
+    + `events=${DIAG.n}\nlast: ${DIAG.last}`;
+}
 function loop() {
   requestAnimationFrame(loop);
+  renderDiag();
   let dt = Math.min(clock.getDelta(), 0.05);
 
   if (toastT > 0) { toastT -= dt; if (toastT <= 0) $('toast').style.opacity = '0'; }
