@@ -163,29 +163,36 @@ function boot() {
     keys[e.key.toLowerCase()] = false;
     if (e.code === 'Space') keys[' '] = false;
   });
-  // click / press-and-hold pedal. The user's GAS pedal is a 2nd mouse that sends a NON-left
-  // button (middle/back/forward), so keying gas to exactly button 0 ignored it entirely. Fix:
-  // RIGHT button (2) = brake; ANY OTHER button (left/middle/back/forward) = gas. Desk mouse's
-  // left-click still works. Rules kept from prior bugs:
-  //   * NEVER read e.buttons on pointermove (desk mouse reports buttons:0 on move-while-held ->
-  //     would cut the throttle to 4mph).
-  //   * RELEASE from the buttons bitmask on up (lenient), so an odd-button device still lets off.
-  const THR_BITS = 0x1D;   // bits 0,2,3,4 = left|middle|back|forward (everything except right=bit1)
-  const releasePedals = () => { mouseThrottle = mouseBrake = false; };
+  // Two very different pedal devices, handled by button:
+  //   * DESKTOP mouse = LEFT button (0): press-and-HOLD (down=on, up=off). Works cleanly.
+  //   * GAS pedal = a 2nd mouse sending a NON-left button (middle/back/forward). That device
+  //     reports its button as RELEASED even while physically held (phantom ups, buttons:0), so
+  //     HOLD flickers the throttle -> car crawls at 4mph. So the gas pedal is a TOGGLE: each
+  //     press flips throttle on/off, and its up events are IGNORED (can't flicker).
+  //   * RIGHT button (2) = brake (hold).
+  // Throttle is ON if the left button is held OR the toggle latch is set.
+  let leftHeld = false, pedalToggle = false, lastToggle = -1e9;
+  const syncThrottle = () => { mouseThrottle = leftHeld || pedalToggle; };
+  const releasePedals = () => { leftHeld = pedalToggle = false; mouseThrottle = mouseBrake = false; };
   const onDown = e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
     if (e.button === 2) mouseBrake = true;                   // right = brake
-    else mouseThrottle = true;                               // any other button = gas
+    else if (e.button === 0) leftHeld = true;                // desktop mouse: hold
+    else {                                                    // gas pedal (odd button): toggle, debounced vs bounce
+      const now = performance.now();
+      if (now - lastToggle > 90) { pedalToggle = !pedalToggle; lastToggle = now; }
+    }
+    syncThrottle();
   };
-  const onUp = e => {   // derive from which buttons remain held (lenient; never reads on move)
-    if (!(e.buttons & THR_BITS)) mouseThrottle = false;
-    if (!(e.buttons & 2)) mouseBrake = false;
+  const onUp = e => {   // never reads buttons on move; gas-pedal ups ignored (toggle-only)
+    if (e.button === 0 || !(e.buttons & 1)) leftHeld = false;
+    if (e.button === 2 || !(e.buttons & 2)) mouseBrake = false;
+    syncThrottle();
   };
-  addEventListener('pointerdown', onDown);
-  addEventListener('mousedown', onDown);                     // legacy fallback for flaky-PointerEvent devices
+  addEventListener('pointerdown', onDown);                   // ONLY pointerdown engages (mousedown would double-toggle)
   addEventListener('pointerup', onUp);
-  addEventListener('mouseup', onUp);
+  addEventListener('mouseup', onUp);                         // release is idempotent, safe to double-bind
   addEventListener('pointercancel', releasePedals);
   addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
   // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
