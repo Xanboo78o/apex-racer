@@ -131,10 +131,14 @@
     </div>
 
     <div class="setSection">
-      <h3>Gas pedal (2nd mouse)</h3>
-      <p class="setNote">Bind a dedicated device (e.g. your pedal-mouse) as the throttle — read directly, so it never clashes with your desktop mouse. <b>Chrome / Edge only.</b></p>
-      <button id="pairPedalBtn" onclick="pairPedal()">🎮 Pair Gas Pedal</button>
-      <span id="pedalStatus" class="setNote"></span>
+      <h3>Pedals (dedicated devices)</h3>
+      <p class="setNote">Bind a device (e.g. a pedal-mouse) read directly — held while it's being pushed, lets off when you stop. <b>Chrome / Edge only.</b></p>
+      <div class="segRow">
+        <button id="pairPedalBtn" onclick="pairPedal()">🎮 Pair Gas Pedal</button>
+        <button id="pairBrakeBtn" onclick="pairBrake()">🛑 Pair Brake Pedal</button>
+      </div>
+      <span id="gasStatus" class="setNote"></span>
+      <span id="brakeStatus" class="setNote"></span>
     </div>
 
     <button class="closeSet" onclick="closeSettings()">Done</button>
@@ -146,10 +150,10 @@
 
 <script src="js/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=1784576251"></script>
-<script src="js/tracks.js?v=1784576251"></script>
-<script src="js/pair.js?v=1784576251"></script>
-<script src="js/main.js?v=1784576251"></script>
+<script src="js/config.js?v=1784576945"></script>
+<script src="js/tracks.js?v=1784576945"></script>
+<script src="js/pair.js?v=1784576945"></script>
+<script src="js/main.js?v=1784576945"></script>
 <script>window.resumeGameBtn = () => resumeGame();</script>
 </body>
 </html>

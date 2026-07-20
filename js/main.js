@@ -19,8 +19,14 @@ let paceMul = 1, fogMul = 1;        // set per-race from hardMode
 // Customization / control settings
 let playerVehicle = localStorage.getItem('apex_vehicle') || 'f1';           // f1|kart|rally|bike|monster
 let brakeMode = localStorage.getItem('apex_brakeMode') || 'mouse';          // mouse | phoneL | phoneR
-let hidThrottle = false, hidDevice = null;    // WebHID gas pedal (2nd mouse read directly)
+// WebHID pedals (gas + brake), each a dedicated device read directly. We treat ONGOING report
+// activity as "the pedal is being pushed" — a foot pressing a pedal jitters the mouse, so reports
+// stream while pushed and STOP when the foot lifts; the pedal releases HID_TIMEOUT ms after the
+// last report. This is the "check if still being pushed, else let off" behaviour.
+const HID_TIMEOUT = 200;
+let hidGasDev = null, hidBrakeDev = null, hidGasLast = -1e9, hidBrakeLast = -1e9;
 let phoneBrake = false;                       // brake button on the phone controller
+const COAST_BRAKE = 0.22;                      // gentle engine-braking when off the gas ("slow a little")
 
 // camera modes
 const CAM_CHASE = 0, CAM_COCKPIT = 1, CAM_FAR = 2;
@@ -184,7 +190,7 @@ function boot() {
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearHeld(); });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
   updateInvertBtn();
-  initPedal();                                  // reconnect a previously-paired WebHID gas pedal
+  initPedals();                                 // reconnect previously-paired WebHID gas/brake pedals
   startAccountFlow(() => buildMenu());
   requestAnimationFrame(loop);
 }
@@ -288,40 +294,56 @@ function buildSettings() {
       if (typeof sendBrakeConfig === 'function') sendBrakeConfig();   // tell the phone
     };
   });
-  const pedalStatus = $('pedalStatus');
-  if (pedalStatus) pedalStatus.textContent = hidDevice ? '✓ pedal paired' : (('hid' in navigator) ? '' : 'needs Chrome/Edge');
+  const noHid = !('hid' in navigator);
+  const gs = $('gasStatus'), bs = $('brakeStatus');
+  if (gs) gs.textContent = hidGasDev ? '✓ gas pedal paired' : (noHid ? 'needs Chrome/Edge' : '');
+  if (bs) bs.textContent = hidBrakeDev ? '✓ brake pedal paired' : (noHid ? 'needs Chrome/Edge' : '');
 }
 window.openSettings = () => { buildSettings(); $('settingsModal').style.display = 'flex'; };
 window.closeSettings = () => { $('settingsModal').style.display = 'none'; };
 
-// ---------------------------------------------------------------- WebHID gas pedal
-async function connectPedal(dev) {
+// ---------------------------------------------------------------- WebHID pedals (gas + brake)
+function hidSig(d) { return `${d.vendorId}:${d.productId}:${d.productName || ''}`; }
+async function connectHid(dev, which) {
   try {
     if (!dev.opened) await dev.open();
-    hidDevice = dev;
-    dev.oninputreport = (e) => {
-      const b = e.data.byteLength ? e.data.getUint8(0) : 0;   // byte0 = mouse button bitmask
-      hidThrottle = (b & 0x07) !== 0;                          // any of left/right/middle held
+    if (which === 'gas') hidGasDev = dev; else hidBrakeDev = dev;
+    // any report = the pedal is active/being pushed; stamp the time (evaluated with HID_TIMEOUT)
+    dev.oninputreport = () => {
+      const t = performance.now();
+      if (which === 'gas') hidGasLast = t; else hidBrakeLast = t;
     };
     return true;
   } catch (e) { return false; }
 }
-window.pairPedal = async () => {
+async function pairHid(which) {
   if (!('hid' in navigator)) { toast('WebHID needs Chrome or Edge'); return; }
   try {
     const devs = await navigator.hid.requestDevice({ filters: [] });
     if (!devs || !devs.length) return;
-    const ok = await connectPedal(devs[0]);
-    if (ok) { localStorage.setItem('apex_hidPedal', '1'); toast('Gas pedal paired ✓'); }
-    else toast('Could not read that device');
+    const ok = await connectHid(devs[0], which);
+    if (ok) {
+      localStorage.setItem(which === 'gas' ? 'apex_hidGas' : 'apex_hidBrake', hidSig(devs[0]));
+      toast((which === 'gas' ? 'Gas' : 'Brake') + ' pedal paired ✓');
+    } else toast('Could not read that device');
     buildSettings();
   } catch (e) { toast('Pairing cancelled'); }
-};
-async function initPedal() {
-  if (!('hid' in navigator) || localStorage.getItem('apex_hidPedal') !== '1') return;
+}
+window.pairPedal = () => pairHid('gas');
+window.pairBrake = () => pairHid('brake');
+async function initPedals() {
+  if (!('hid' in navigator)) return;
   try {
     const devs = await navigator.hid.getDevices();
-    if (devs && devs.length) await connectPedal(devs[0]);
+    if (!devs || !devs.length) return;
+    const gasSig = localStorage.getItem('apex_hidGas');
+    const brakeSig = localStorage.getItem('apex_hidBrake');
+    const used = new Set();
+    // match remembered device signatures; two identical mice just take first-available
+    for (const d of devs) {
+      if (gasSig && !hidGasDev && hidSig(d) === gasSig && !used.has(d)) { await connectHid(d, 'gas'); used.add(d); }
+      else if (brakeSig && !hidBrakeDev && hidSig(d) === brakeSig && !used.has(d)) { await connectHid(d, 'brake'); used.add(d); }
+    }
   } catch (e) {}
 }
 
@@ -1747,14 +1769,14 @@ function loop() {
       for (const car of cars) {
         let input;
         if (car.isPlayer) {
-          input = {
-            // throttle: keyboard W, mouse-hold pedal, or a WebHID gas pedal (2nd mouse read raw)
-            throttle: Math.max(kThr, throttlePedal, hidThrottle ? 1 : 0),
-            // brake: keyboard S, right-click, or the phone brake button
-            brake: Math.max(kBrk, brakePedal, phoneBrake ? 1 : 0),
-            steer: playerSteer(),
-            handbrake: keys[' '] ? 1 : 0,
-          };
+          const now = performance.now();
+          const hidGas = (now - hidGasLast) < HID_TIMEOUT;      // pedal seen "pushed" recently
+          const hidBrk = (now - hidBrakeLast) < HID_TIMEOUT;
+          const thr = Math.max(kThr, throttlePedal, hidGas ? 1 : 0);
+          let brk = Math.max(kBrk, brakePedal, phoneBrake ? 1 : 0, hidBrk ? 1 : 0);
+          // off the gas (and not braking) => gentle engine-braking so lifting off slows you a little
+          if (thr < 0.06 && brk < 0.06) brk = COAST_BRAKE;
+          input = { throttle: thr, brake: brk, steer: playerSteer(), handbrake: keys[' '] ? 1 : 0 };
         } else if (car.finished) {
           input = aiInputs(car); input.throttle = Math.min(input.throttle, 0.4);
         } else {

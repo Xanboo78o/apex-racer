@@ -110,8 +110,11 @@ canvas { display: block; }
 .segRow button { flex: 1; min-width: 120px !important; background: #232a35 !important; border: 1px solid #3a4453; border-radius: 10px; padding: 11px 8px; font-size: 13px; }
 .segRow button:hover { background: #2c3542 !important; }
 .segRow button.sel { background: #2b62e0 !important; border-color: #6f9dff; }
-#pairPedalBtn { background: #16351f !important; border: 1px solid #2f7a45; border-radius: 10px; }
+#pairPedalBtn { background: #16351f !important; border: 1px solid #2f7a45 !important; border-radius: 10px; }
 #pairPedalBtn:hover { background: #1d4a2b !important; }
+#pairBrakeBtn { background: #351616 !important; border: 1px solid #7a2f2f !important; border-radius: 10px; }
+#pairBrakeBtn:hover { background: #4a1d1d !important; }
+#gasStatus, #brakeStatus { display: block; }
 .settingsPanel .closeSet { background: #2b323d !important; align-self: center; margin-top: 6px; }
 .pairUrl {
   font-family: monospace; font-size: 14px; background: #0c0e12; padding: 10px;
