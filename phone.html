@@ -71,6 +71,18 @@
   #pMini { display: block; width: 30vh; max-width: 260px; height: auto; }
   #fsBtn { position: fixed; right: calc(12px + env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom));
     z-index: 20; width: auto; padding: 12px 16px; font-size: 15px; background: #2b3038; }
+  /* brake pad — big touch target, side chosen by the game */
+  #brakeBtn {
+    display: none; position: fixed; bottom: calc(20px + env(safe-area-inset-bottom));
+    z-index: 25; width: 30vw; max-width: 200px; height: 34vh; max-height: 260px;
+    border-radius: 20px; background: #7a1d18; border: 3px solid #e23b2e;
+    font-size: 22px; font-weight: 900; letter-spacing: 2px; color: #fff; touch-action: none;
+    display: none; align-items: center; justify-content: center;
+  }
+  #brakeBtn.on { display: flex; }
+  #brakeBtn.left { left: calc(16px + env(safe-area-inset-left)); }
+  #brakeBtn.right { right: calc(16px + env(safe-area-inset-right)); }
+  #brakeBtn.pressed { background: #e23b2e; transform: scale(.97); }
 </style>
 </head>
 <body>
@@ -99,6 +111,7 @@
     <div id="pMiniWrap"><canvas id="pMini" width="240" height="180"></canvas></div>
     <div id="pSpeedo"><span id="pSpeed">0</span><small>km/h</small></div>
     <button class="sec" id="fsBtn">⛶ Fullscreen</button>
+    <button id="brakeBtn">BRAKE</button>
 
     <div id="status">Connecting…</div>
     <svg id="wheel" viewBox="0 0 200 200">
@@ -125,7 +138,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=1784575156"></script>
-<script src="js/phone.js?v=1784575156"></script>
+<script src="js/config.js?v=1784576251"></script>
+<script src="js/phone.js?v=1784576251"></script>
 </body>
 </html>

@@ -16,6 +16,11 @@ const CORRIDOR = 90;                // metres of flat blend from track edge into
 // Hard mode: same displayed number, but the world rushes at you and the fog is tight.
 let hardMode = localStorage.getItem('apex_hard') === '1';
 let paceMul = 1, fogMul = 1;        // set per-race from hardMode
+// Customization / control settings
+let playerVehicle = localStorage.getItem('apex_vehicle') || 'f1';           // f1|kart|rally|bike|monster
+let brakeMode = localStorage.getItem('apex_brakeMode') || 'mouse';          // mouse | phoneL | phoneR
+let hidThrottle = false, hidDevice = null;    // WebHID gas pedal (2nd mouse read directly)
+let phoneBrake = false;                       // brake button on the phone controller
 
 // camera modes
 const CAM_CHASE = 0, CAM_COCKPIT = 1, CAM_FAR = 2;
@@ -179,6 +184,7 @@ function boot() {
   document.addEventListener('visibilitychange', () => { if (document.hidden) clearHeld(); });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
   updateInvertBtn();
+  initPedal();                                  // reconnect a previously-paired WebHID gas pedal
   startAccountFlow(() => buildMenu());
   requestAnimationFrame(loop);
 }
@@ -254,6 +260,70 @@ window.toggleHard = () => {
   updateHardBtn();
   toast(hardMode ? 'Hard mode — it comes at you fast' : 'Normal mode');
 };
+
+// ---------------------------------------------------------------- settings modal
+function buildSettings() {
+  // vehicle picker
+  const vg = $('vehicleGrid');
+  if (vg) {
+    vg.innerHTML = '';
+    for (const v of VEHICLES) {
+      const b = document.createElement('button');
+      b.className = 'vehBtn' + (v === playerVehicle ? ' sel' : '');
+      b.textContent = VEHICLE_LABELS[v];
+      b.onclick = () => {
+        playerVehicle = v; localStorage.setItem('apex_vehicle', v);
+        [...vg.children].forEach(c => c.classList.remove('sel'));
+        b.classList.add('sel');
+      };
+      vg.appendChild(b);
+    }
+  }
+  // brake mode
+  document.querySelectorAll('#brakeRow button').forEach(b => {
+    b.classList.toggle('sel', b.dataset.brake === brakeMode);
+    b.onclick = () => {
+      brakeMode = b.dataset.brake; localStorage.setItem('apex_brakeMode', brakeMode);
+      document.querySelectorAll('#brakeRow button').forEach(x => x.classList.toggle('sel', x === b));
+      if (typeof sendBrakeConfig === 'function') sendBrakeConfig();   // tell the phone
+    };
+  });
+  const pedalStatus = $('pedalStatus');
+  if (pedalStatus) pedalStatus.textContent = hidDevice ? '✓ pedal paired' : (('hid' in navigator) ? '' : 'needs Chrome/Edge');
+}
+window.openSettings = () => { buildSettings(); $('settingsModal').style.display = 'flex'; };
+window.closeSettings = () => { $('settingsModal').style.display = 'none'; };
+
+// ---------------------------------------------------------------- WebHID gas pedal
+async function connectPedal(dev) {
+  try {
+    if (!dev.opened) await dev.open();
+    hidDevice = dev;
+    dev.oninputreport = (e) => {
+      const b = e.data.byteLength ? e.data.getUint8(0) : 0;   // byte0 = mouse button bitmask
+      hidThrottle = (b & 0x07) !== 0;                          // any of left/right/middle held
+    };
+    return true;
+  } catch (e) { return false; }
+}
+window.pairPedal = async () => {
+  if (!('hid' in navigator)) { toast('WebHID needs Chrome or Edge'); return; }
+  try {
+    const devs = await navigator.hid.requestDevice({ filters: [] });
+    if (!devs || !devs.length) return;
+    const ok = await connectPedal(devs[0]);
+    if (ok) { localStorage.setItem('apex_hidPedal', '1'); toast('Gas pedal paired ✓'); }
+    else toast('Could not read that device');
+    buildSettings();
+  } catch (e) { toast('Pairing cancelled'); }
+};
+async function initPedal() {
+  if (!('hid' in navigator) || localStorage.getItem('apex_hidPedal') !== '1') return;
+  try {
+    const devs = await navigator.hid.getDevices();
+    if (devs && devs.length) await connectPedal(devs[0]);
+  } catch (e) {}
+}
 
 function drawTrackThumb(cv, def, color = '#e8e4da') {
   const ctx = cv.getContext('2d');
@@ -1021,11 +1091,16 @@ function buildEnvironment(def, env) {
 }
 
 // ---------------------------------------------------------------- cars
-function buildCarMesh(color, helmet) {
+const VEHICLES = ['f1', 'kart', 'rally', 'bike', 'monster'];
+const VEHICLE_LABELS = { f1: '🏎️ F1 Car', kart: '🏁 Go-Kart', rally: '🚗 Rally Car', bike: '🏍️ Motorbike', monster: '🛻 Monster Truck' };
+
+function buildCarMesh(color, helmet, vehicle = 'f1') {
   const g = new THREE.Group();
   const paint = toonMat(color);
   const dark = toonMat(0x1c1e22);
+  const glass = toonMat(0x2b3540);
   const helmetMat = toonMat(helmet);
+  const wheels = [];
 
   const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0) => {
     const m = new THREE.Mesh(geo, mat);
@@ -1035,40 +1110,93 @@ function buildCarMesh(color, helmet) {
     g.add(m);
     return m;
   };
-
-  add(new THREE.BoxGeometry(1.5, 0.42, 3.4), paint, 0, 0.42, -0.1);        // tub
-  add(new THREE.BoxGeometry(0.62, 0.3, 1.7), paint, 0, 0.42, 2.0);         // nose
-  add(new THREE.BoxGeometry(2.1, 0.09, 0.62), dark, 0, 0.3, 2.8);          // front wing
-  add(new THREE.BoxGeometry(0.9, 0.5, 1.5), paint, 0, 0.76, -1.0);         // engine cover
-  add(new THREE.BoxGeometry(0.7, 0.28, 0.7), dark, 0, 0.72, 0.55);         // cockpit rim
-  add(new THREE.SphereGeometry(0.3, 10, 8), helmetMat, 0, 0.86, 0.35);     // helmet
-  add(new THREE.BoxGeometry(1.8, 0.09, 0.55), dark, 0, 1.06, -2.1);        // rear wing plane
-  add(new THREE.BoxGeometry(0.08, 0.5, 0.55), dark, -0.82, 0.82, -2.1);
-  add(new THREE.BoxGeometry(0.08, 0.5, 0.55), dark, 0.82, 0.82, -2.1);
-  add(new THREE.BoxGeometry(0.5, 0.4, 1.6), paint, -0.98, 0.45, -0.4);     // sidepods
-  add(new THREE.BoxGeometry(0.5, 0.4, 1.6), paint, 0.98, 0.45, -0.4);
-
-  const wheelGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.44, 12);
-  const wheels = [];
-  for (const [x, z, front] of [[-1.02, 1.55, 1], [1.02, 1.55, 1], [-1.06, -1.55, 0], [1.06, -1.55, 0]]) {
+  // a wheel = a group (steers via .rotation.y) whose child[0] is the rolling cylinder.
+  const wheel = (x, z, front, r = 0.45, width = 0.44) => {
     const wg = new THREE.Group();
-    const w = new THREE.Mesh(wheelGeo, dark);
-    w.rotation.z = Math.PI / 2;
-    w.castShadow = true;
+    const w = new THREE.Mesh(new THREE.CylinderGeometry(r, r, width, 12), dark);
+    w.rotation.z = Math.PI / 2; w.castShadow = true;
     wg.add(w);
-    wg.position.set(x, 0.45, z);
+    wg.position.set(x, r, z);            // bottom of wheel sits at mesh-local y=0 (on the road)
     wg.userData.front = !!front;
-    g.add(wg);
-    wheels.push(wg);
+    g.add(wg); wheels.push(wg);
+    return wg;
+  };
+  const rider = (z, lean) => {                  // seated driver: torso + helmet (karts, bike)
+    add(new THREE.BoxGeometry(0.5, 0.6, 0.42), dark, 0, 0.62, z, lean || 0);   // torso
+    add(new THREE.SphereGeometry(0.28, 10, 8), helmetMat, 0, 1.0, z + (lean ? 0.18 : 0));
+  };
+
+  if (vehicle === 'kart') {
+    add(new THREE.BoxGeometry(1.15, 0.16, 2.5), paint, 0, 0.2, 0);            // flat floor pan
+    add(new THREE.BoxGeometry(1.25, 0.12, 0.5), dark, 0, 0.22, 1.35);        // front bumper
+    add(new THREE.BoxGeometry(0.9, 0.5, 0.7), paint, 0, 0.45, -0.2);         // seat back
+    add(new THREE.BoxGeometry(0.5, 0.4, 0.55), dark, 0.5, 0.42, -1.05);      // side engine
+    add(new THREE.CylinderGeometry(0.02, 0.02, 0.7, 6), dark, 0, 0.62, 0.75, Math.PI / 3); // steering column
+    add(new THREE.TorusGeometry(0.22, 0.04, 6, 10), dark, 0, 0.78, 0.95, Math.PI / 2.4);    // small wheel
+    rider(-0.1);
+    wheel(-0.72, 0.95, 1, 0.34, 0.3); wheel(0.72, 0.95, 1, 0.34, 0.3);
+    wheel(-0.78, -0.95, 0, 0.4, 0.42); wheel(0.78, -0.95, 0, 0.4, 0.42);
+  } else if (vehicle === 'rally') {
+    add(new THREE.BoxGeometry(1.9, 0.7, 4.0), paint, 0, 0.6, 0);             // main body
+    add(new THREE.BoxGeometry(1.7, 0.6, 1.9), paint, 0, 1.15, -0.15);       // cabin
+    add(new THREE.BoxGeometry(1.55, 0.42, 1.7), glass, 0, 1.2, -0.15);      // windows band
+    add(new THREE.BoxGeometry(1.72, 0.5, 1.0), paint, 0, 1.35, -0.2);       // roof
+    add(new THREE.BoxGeometry(0.5, 0.16, 0.4), dark, 0, 1.66, 0.1);         // roof scoop
+    add(new THREE.BoxGeometry(2.0, 0.1, 0.5), dark, 0, 1.05, -2.05);        // rear spoiler
+    add(new THREE.BoxGeometry(0.09, 0.35, 0.5), paint, -0.9, 0.9, -2.05);
+    add(new THREE.BoxGeometry(0.09, 0.35, 0.5), paint, 0.9, 0.9, -2.05);
+    add(new THREE.BoxGeometry(1.6, 0.2, 0.3), dark, 0, 0.55, 2.05);         // front bumper/lights
+    for (const fz of [1.45, -1.45]) { add(new THREE.BoxGeometry(2.1, 0.5, 0.9), dark, 0, 0.4, fz); } // fender arches
+    wheel(-1.0, 1.45, 1, 0.52, 0.5); wheel(1.0, 1.45, 1, 0.52, 0.5);
+    wheel(-1.0, -1.45, 0, 0.52, 0.5); wheel(1.0, -1.45, 0, 0.52, 0.5);
+  } else if (vehicle === 'bike') {
+    add(new THREE.BoxGeometry(0.34, 0.42, 1.5), paint, 0, 0.72, -0.1);      // frame/tank
+    add(new THREE.BoxGeometry(0.4, 0.16, 0.9), dark, 0, 0.92, -0.55);       // seat
+    add(new THREE.BoxGeometry(0.5, 0.3, 0.7), paint, 0, 0.66, 0.75);        // front fairing
+    add(new THREE.BoxGeometry(0.7, 0.05, 0.08), dark, 0, 1.0, 0.95);        // handlebars
+    add(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 6), dark, 0, 0.82, 0.9, Math.PI / 2.6); // forks
+    // leaning rider
+    add(new THREE.BoxGeometry(0.42, 0.7, 0.42), dark, 0, 1.05, -0.1, -0.5);     // torso leaning fwd
+    add(new THREE.SphereGeometry(0.27, 10, 8), helmetMat, 0, 1.35, 0.35);       // helmet forward
+    add(new THREE.BoxGeometry(0.16, 0.5, 0.16), dark, -0.3, 1.0, 0.5, 0, 0, 0.5); // arms to bars
+    add(new THREE.BoxGeometry(0.16, 0.5, 0.16), dark, 0.3, 1.0, 0.5, 0, 0, -0.5);
+    wheel(0, 1.25, 1, 0.5, 0.24);      // front (steers)
+    wheel(0, -1.25, 0, 0.5, 0.28);     // rear
+  } else if (vehicle === 'monster') {
+    add(new THREE.BoxGeometry(2.0, 0.5, 3.4), dark, 0, 1.4, 0);             // tall chassis/frame
+    add(new THREE.BoxGeometry(2.0, 0.9, 1.5), paint, 0, 2.0, -0.3);         // cab
+    add(new THREE.BoxGeometry(1.8, 0.55, 1.2), glass, 0, 2.1, -0.25);       // windows
+    add(new THREE.BoxGeometry(2.0, 0.7, 1.4), paint, 0, 1.85, 1.1);         // hood
+    add(new THREE.BoxGeometry(2.2, 0.25, 0.3), dark, 0, 1.7, 1.9);          // front bumper
+    add(new THREE.BoxGeometry(0.5, 0.2, 0.5), dark, 0, 2.55, 0.4);          // roof lights bar base
+    for (const lx of [-0.5, 0, 0.5]) add(new THREE.SphereGeometry(0.14, 8, 6), toonMat(0xfff2b0), lx, 2.7, 0.4);
+    wheel(-1.15, 1.35, 1, 0.95, 0.8); wheel(1.15, 1.35, 1, 0.95, 0.8);      // huge wheels
+    wheel(-1.15, -1.35, 0, 0.95, 0.8); wheel(1.15, -1.35, 0, 0.95, 0.8);
+  } else {   // 'f1' (default)
+    add(new THREE.BoxGeometry(1.5, 0.42, 3.4), paint, 0, 0.42, -0.1);        // tub
+    add(new THREE.BoxGeometry(0.62, 0.3, 1.7), paint, 0, 0.42, 2.0);         // nose
+    add(new THREE.BoxGeometry(2.1, 0.09, 0.62), dark, 0, 0.3, 2.8);          // front wing
+    add(new THREE.BoxGeometry(0.9, 0.5, 1.5), paint, 0, 0.76, -1.0);         // engine cover
+    add(new THREE.BoxGeometry(0.7, 0.28, 0.7), dark, 0, 0.72, 0.55);         // cockpit rim
+    add(new THREE.SphereGeometry(0.3, 10, 8), helmetMat, 0, 0.86, 0.35);     // helmet
+    add(new THREE.BoxGeometry(1.8, 0.09, 0.55), dark, 0, 1.06, -2.1);        // rear wing plane
+    add(new THREE.BoxGeometry(0.08, 0.5, 0.55), dark, -0.82, 0.82, -2.1);
+    add(new THREE.BoxGeometry(0.08, 0.5, 0.55), dark, 0.82, 0.82, -2.1);
+    add(new THREE.BoxGeometry(0.5, 0.4, 1.6), paint, -0.98, 0.45, -0.4);     // sidepods
+    add(new THREE.BoxGeometry(0.5, 0.4, 1.6), paint, 0.98, 0.45, -0.4);
+    wheel(-1.02, 1.55, 1); wheel(1.02, 1.55, 1);
+    wheel(-1.06, -1.55, 0); wheel(1.06, -1.55, 0);
   }
+
   g.userData.wheels = wheels;
   addOutlines(g, 1.05);
   return g;
 }
 
-function makeCar(color, isPlayer, name, helmet) {
+function makeCar(color, isPlayer, name, helmet, vehicle = 'f1') {
   return {
-    mesh: buildCarMesh(color, helmet),
+    mesh: buildCarMesh(color, helmet, vehicle),
+    vehicle,
     color, name, isPlayer,
     x: 0, z: 0, y: 0, heading: 0, roll: 0, pitch: 0,
     velX: 0, velZ: 0, steer: 0,
@@ -1325,7 +1453,7 @@ function startGame(def, m) {
   for (let k = order.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [order[k], order[j]] = [order[j], order[k]]; }
   const fastSet = new Set(order.slice(0, fastCount));
   for (let i = 0; i < nAI; i++) {
-    const c = makeCar(CAR_COLORS[i + 1], false, AI_NAMES[i], HELMET_COLORS[i + 1]);
+    const c = makeCar(CAR_COLORS[i + 1], false, AI_NAMES[i], HELMET_COLORS[i + 1], VEHICLES[Math.floor(Math.random() * VEHICLES.length)]);
     const fast = fastSet.has(i);
     c.skill = (fast ? 0.99 + Math.random() * 0.02 : 0.95 + Math.random() * 0.035) * (hardMode ? 1.02 : 1);
     // fluctuating top-speed limiter, in shown units
@@ -1346,7 +1474,7 @@ function startGame(def, m) {
     c.wJW = 3.0 + Math.random() * 2.5;   c.wJP = Math.random() * Math.PI * 2;
     cars.push(c);
   }
-  player = makeCar(CAR_COLORS[0], true, 'You', HELMET_COLORS[0]);
+  player = makeCar(CAR_COLORS[0], true, 'You', HELMET_COLORS[0], playerVehicle);
   cars.push(player);
 
   cars.sort((a, b) => (b.skill || 0) - (a.skill || 0));
@@ -1620,8 +1748,10 @@ function loop() {
         let input;
         if (car.isPlayer) {
           input = {
-            throttle: Math.max(kThr, throttlePedal),   // keyboard is instant; click pedal is analog
-            brake: Math.max(kBrk, brakePedal),
+            // throttle: keyboard W, mouse-hold pedal, or a WebHID gas pedal (2nd mouse read raw)
+            throttle: Math.max(kThr, throttlePedal, hidThrottle ? 1 : 0),
+            // brake: keyboard S, right-click, or the phone brake button
+            brake: Math.max(kBrk, brakePedal, phoneBrake ? 1 : 0),
             steer: playerSteer(),
             handbrake: keys[' '] ? 1 : 0,
           };

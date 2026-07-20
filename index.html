@@ -93,7 +93,7 @@
   <div class="menuInner">
     <h1>APEX<span>RACER</span></h1>
     <p class="tagline">Six circuits · rolling terrain · banked corners</p>
-    <div id="diffRow"><button id="hardBtn" onclick="toggleHard()">Difficulty: Normal</button></div>
+    <div id="diffRow"><button id="hardBtn" onclick="toggleHard()">Difficulty: Normal</button><button id="settingsBtn" onclick="openSettings()">⚙ Settings</button></div>
     <div id="trackGrid"></div>
     <p class="footer">Keyboard: <b>W</b>/<b>S</b> throttle &amp; brake · <b>A</b>/<b>D</b> steer · pick <b>Race</b> for AI grid, <b>Time Trial</b> for the clock.</p>
   </div>
@@ -110,15 +110,46 @@
   </div>
 </div>
 
+<!-- Settings -->
+<div id="settingsModal">
+  <div class="panel settingsPanel">
+    <h2>⚙ Settings</h2>
+
+    <div class="setSection">
+      <h3>Your vehicle</h3>
+      <div id="vehicleGrid"></div>
+    </div>
+
+    <div class="setSection">
+      <h3>Brake</h3>
+      <p class="setNote">Where your brake input comes from (throttle stays on W / left-click / paired pedal).</p>
+      <div id="brakeRow" class="segRow">
+        <button data-brake="mouse">🖱️ Right-click</button>
+        <button data-brake="phoneL">📱 Phone — left</button>
+        <button data-brake="phoneR">📱 Phone — right</button>
+      </div>
+    </div>
+
+    <div class="setSection">
+      <h3>Gas pedal (2nd mouse)</h3>
+      <p class="setNote">Bind a dedicated device (e.g. your pedal-mouse) as the throttle — read directly, so it never clashes with your desktop mouse. <b>Chrome / Edge only.</b></p>
+      <button id="pairPedalBtn" onclick="pairPedal()">🎮 Pair Gas Pedal</button>
+      <span id="pedalStatus" class="setNote"></span>
+    </div>
+
+    <button class="closeSet" onclick="closeSettings()">Done</button>
+  </div>
+</div>
+
 <!-- Results -->
 <div id="results"></div>
 
 <script src="js/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=1784575156"></script>
-<script src="js/tracks.js?v=1784575156"></script>
-<script src="js/pair.js?v=1784575156"></script>
-<script src="js/main.js?v=1784575156"></script>
+<script src="js/config.js?v=1784576251"></script>
+<script src="js/tracks.js?v=1784576251"></script>
+<script src="js/pair.js?v=1784576251"></script>
+<script src="js/main.js?v=1784576251"></script>
 <script>window.resumeGameBtn = () => resumeGame();</script>
 </body>
 </html>

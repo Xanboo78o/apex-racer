@@ -85,12 +85,16 @@ function initPairing() {
         apexChannel.send({ type: 'broadcast', event: 'host-ack', payload: { name: account.username } });
         phoneConnected = true; updatePairStatusUI();
         sendTrackToPhone();                      // give a freshly-joined phone the current track outline
+        sendBrakeConfig();                       // tell the phone whether/where to show a brake button
+      })
+      .on('broadcast', { event: 'brake' }, ({ payload }) => {
+        phoneBrake = !!(payload && payload.v);   // phone brake button pressed/released
       })
       .on('presence', { event: 'leave' }, () => {
         // if the phone left presence, drop the connection
         const state = apexChannel.presenceState();
         const hasPhone = Object.values(state).flat().some(p => p.role === 'phone');
-        if (!hasPhone) { phoneConnected = false; gyroSteer = 0; updatePairStatusUI(); }
+        if (!hasPhone) { phoneConnected = false; gyroSteer = 0; phoneBrake = false; updatePairStatusUI(); }
       })
       .subscribe(status => {
         if (status === 'SUBSCRIBED') apexChannel.track({ role: 'game', name: account.username });
@@ -99,7 +103,7 @@ function initPairing() {
     // watchdog: if steering stops arriving for 2.5s, mark disconnected
     setInterval(() => {
       if (phoneConnected && performance.now() - lastSteerAt > 2500) {
-        phoneConnected = false; gyroSteer = 0; updatePairStatusUI();
+        phoneConnected = false; gyroSteer = 0; phoneBrake = false; updatePairStatusUI();
       }
     }, 1000);
   } catch (e) { console.warn('pairing init failed', e); }
@@ -153,6 +157,13 @@ function sendTelemetry() {
       laps: track && track.def ? track.def.laps : 0, mode, cars: cs,
     } });
   } catch (e) {}
+}
+
+// game -> phone: where to show the brake button ('off' | 'left' | 'right'), from brakeMode (main.js global).
+function sendBrakeConfig() {
+  if (!apexChannel || !phoneConnected) return;
+  const side = brakeMode === 'phoneL' ? 'left' : brakeMode === 'phoneR' ? 'right' : 'off';
+  try { apexChannel.send({ type: 'broadcast', event: 'brakecfg', payload: { side } }); } catch (e) {}
 }
 
 function updatePairStatusUI() {

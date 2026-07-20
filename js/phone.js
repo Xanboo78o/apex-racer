@@ -52,6 +52,7 @@ async function connect() {
     .on('broadcast', { event: 'rumble' }, ({ payload }) => { rumbleTarget = clamp((payload && payload.v) || 0, 0, 1); rumbleAt = performance.now(); })
     .on('broadcast', { event: 'track' }, ({ payload }) => buildPhoneTrack(payload))
     .on('broadcast', { event: 'hud' }, ({ payload }) => updatePhoneHud(payload))
+    .on('broadcast', { event: 'brakecfg' }, ({ payload }) => setBrakeSide(payload && payload.side))
     .subscribe(status => {
       if (status === 'SUBSCRIBED') {
         channel.track({ role: 'phone' });
@@ -173,6 +174,25 @@ async function goFullscreen() {
   catch (e) { /* lock needs fullscreen / unsupported — CSS portrait notice covers it */ }
 }
 $('fsBtn').addEventListener('click', () => { goFullscreen(); });
+
+// ---------------------------------------------------------------- brake pad (game -> phone config)
+function setBrakeSide(side) {
+  const b = $('brakeBtn');
+  b.classList.remove('on', 'left', 'right');
+  if (side === 'left' || side === 'right') b.classList.add('on', side);
+}
+function sendBrake(v) {
+  if (channel) { try { channel.send({ type: 'broadcast', event: 'brake', payload: { v: v ? 1 : 0 } }); } catch (e) {} }
+}
+(function () {
+  const b = $('brakeBtn');
+  const press = e => { e.preventDefault(); b.classList.add('pressed'); sendBrake(1); };
+  const release = e => { if (e) e.preventDefault(); b.classList.remove('pressed'); sendBrake(0); };
+  b.addEventListener('pointerdown', press);
+  b.addEventListener('pointerup', release);
+  b.addEventListener('pointercancel', release);
+  b.addEventListener('pointerleave', release);
+})();
 
 // ---------------------------------------------------------------- HUD from the game (minimap + speed)
 let trkBase = null, trkScale = null;   // offscreen track outline + its {s,ox,oz} transform
