@@ -1288,6 +1288,7 @@ function startGame(def, m) {
   $('bestLap').textContent = 'Best ' + fmtTime(best ? +best : null);
   $('trackLabel').textContent = def.name;
   updateHUD();
+  if (typeof sendTrackToPhone === 'function') sendTrackToPhone();   // new track outline -> phone minimap
   clock.getDelta();
 }
 
@@ -1587,6 +1588,7 @@ function loop() {
       else if (track.def.surface === 'dirt') rumble = 0.22 * Math.min(1, 0.5 + pv / 45); // baja dirt: slight
       sendRumble(rumble);
     }
+    if (typeof sendTelemetry === 'function') sendTelemetry();   // speed + car dots -> phone HUD
   }
 
   render(dt); updateAudio(dt);

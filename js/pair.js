@@ -84,6 +84,7 @@ function initPairing() {
         // phone announced itself — ack so it knows the game is listening
         apexChannel.send({ type: 'broadcast', event: 'host-ack', payload: { name: account.username } });
         phoneConnected = true; updatePairStatusUI();
+        sendTrackToPhone();                      // give a freshly-joined phone the current track outline
       })
       .on('presence', { event: 'leave' }, () => {
         // if the phone left presence, drop the connection
@@ -113,6 +114,45 @@ function sendRumble(level) {
   if (now - lastRumbleSent < 80 && Math.abs(level - lastRumbleVal) < 0.15) return;
   lastRumbleSent = now; lastRumbleVal = level;
   try { apexChannel.send({ type: 'broadcast', event: 'rumble', payload: { v: +level.toFixed(2) } }); } catch (e) {}
+}
+
+// game -> phone: send the current track's shape ONCE so the phone can draw its own minimap.
+// (track / cars / player / mode / SPEED_DISPLAY_SCALE are globals from main.js — shared scope.)
+function sendTrackToPhone() {
+  if (!apexChannel || !phoneConnected) return;
+  if (typeof track === 'undefined' || !track || !track.def) return;
+  try {
+    apexChannel.send({ type: 'broadcast', event: 'track', payload: {
+      points: track.def.points, laps: track.def.laps || 0, name: track.def.name || '',
+    } });
+  } catch (e) {}
+}
+
+// game -> phone: stream speed + car positions for the phone's HUD (throttled ~12Hz).
+let lastTelemAt = 0;
+function sendTelemetry() {
+  if (!apexChannel || !phoneConnected) return;
+  if (typeof player === 'undefined' || !player || typeof cars === 'undefined' || !cars.length) return;
+  const now = performance.now();
+  if (now - lastTelemAt < 80) return;
+  lastTelemAt = now;
+  const spd = Math.round(Math.hypot(player.velX, player.velZ) * 3.6 * SPEED_DISPLAY_SCALE);
+  let pos = 1;
+  if (mode === 'race' && track) {
+    const order = [...cars].sort((a, b) => (b.lap * track.N + b.distAcc) - (a.lap * track.N + a.distAcc));
+    pos = order.indexOf(player) + 1;
+  }
+  const cs = cars.map(car => ({
+    x: +car.x.toFixed(1), z: +car.z.toFixed(1),
+    c: car.isPlayer ? 'ffffff' : car.color.toString(16).padStart(6, '0'),
+    p: car.isPlayer ? 1 : 0,
+  }));
+  try {
+    apexChannel.send({ type: 'broadcast', event: 'hud', payload: {
+      s: spd, pos, lap: Math.max(1, player.lap + 1),
+      laps: track && track.def ? track.def.laps : 0, mode, cars: cs,
+    } });
+  } catch (e) {}
 }
 
 function updatePairStatusUI() {
