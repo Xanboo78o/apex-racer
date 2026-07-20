@@ -2,9 +2,12 @@
 'use strict';
 
 // ---------------------------------------------------------------- constants
-const CAR_COLORS = [0xe23b2e, 0x2f6fe0, 0xf0a821, 0x28b45a, 0xe6e8ee, 0x9b30e0, 0x14b8c4, 0xe85d9c];
-const HELMET_COLORS = [0xffffff, 0xffd23e, 0x111318, 0xe23b2e, 0x2f6fe0, 0x28b45a, 0x9b30e0, 0xf0a821];
-const AI_NAMES = ['Vettori', 'Okonkwo', 'Larsson', 'Tanaka', 'Moreau', 'Novak', 'Alvarez'];
+const CAR_COLORS = [0xe23b2e, 0x2f6fe0, 0xf0a821, 0x28b45a, 0xe6e8ee, 0x9b30e0, 0x14b8c4, 0xe85d9c,
+  0xff7a1a, 0x1fd18b, 0x6c7ae0, 0xd4d21a, 0xb03a2e, 0x3ad0e6];
+const HELMET_COLORS = [0xffffff, 0xffd23e, 0x111318, 0xe23b2e, 0x2f6fe0, 0x28b45a, 0x9b30e0, 0xf0a821,
+  0xff7a1a, 0x1fd18b, 0xe6e8ee, 0x14b8c4, 0xe85d9c, 0x6c7ae0];
+const AI_NAMES = ['Vettori', 'Okonkwo', 'Larsson', 'Tanaka', 'Moreau', 'Novak', 'Alvarez',
+  'Bianchi', 'Kowalski', 'Nakamura', 'Ferreira', 'Haugen', 'Delacroix'];
 const N_SAMPLES = 1400;
 const SUBSTEPS = 3;
 const SPEED_DISPLAY_SCALE = 0.45;   // the car really moves fast; show a friendlier number (~200 top)
@@ -398,8 +401,11 @@ function fmtTime(ms) {
   return `${m}:${String(s).padStart(2, '0')}.${String(t).padStart(3, '0')}`;
 }
 
-function pauseGame() { pausedFrom = state; state = 'paused'; $('pause').style.display = 'flex'; }
-function resumeGame() { state = pausedFrom; $('pause').style.display = 'none'; clock.getDelta(); }
+function pauseGame() { pausedFrom = state; state = 'paused'; MUSIC.playing = false; $('pause').style.display = 'flex'; }
+function resumeGame() {
+  state = pausedFrom; $('pause').style.display = 'none'; clock.getDelta();
+  if (audio.ctx && MUSIC.song && (state === 'race' || state === 'tt' || state === 'countdown')) { MUSIC.playing = true; MUSIC.nextT = audio.ctx.currentTime + 0.1; }
+}
 
 // ---------------------------------------------------------------- textures
 function makeRoadTexture(surface) {
@@ -1480,14 +1486,14 @@ function startGame(def, m) {
   buildTrack(def);
 
   cars = [];
-  const nAI = mode === 'race' ? 7 : 0;               // 7 AI + you = 8 drivers
-  // top-speed tiers (shown speed): 2 front-runners top 195-200 (mostly 195), the rest 185-190.
-  const fastCount = 2;
+  const nAI = mode === 'race' ? 11 : 0;              // 11 AI + you = 12 drivers
+  // top-speed tiers (shown speed): 3 front-runners top 195-200 (mostly 195), the rest 185-190.
+  const fastCount = 3;
   const order = Array.from({ length: nAI }, (_, i) => i);
   for (let k = order.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [order[k], order[j]] = [order[j], order[k]]; }
   const fastSet = new Set(order.slice(0, fastCount));
   for (let i = 0; i < nAI; i++) {
-    const c = makeCar(CAR_COLORS[i + 1], false, AI_NAMES[i], HELMET_COLORS[i + 1], VEHICLES[Math.floor(Math.random() * VEHICLES.length)]);
+    const c = makeCar(CAR_COLORS[(i + 1) % CAR_COLORS.length], false, AI_NAMES[i % AI_NAMES.length], HELMET_COLORS[(i + 1) % HELMET_COLORS.length], VEHICLES[Math.floor(Math.random() * VEHICLES.length)]);
     const fast = fastSet.has(i);
     c.skill = (fast ? 0.99 + Math.random() * 0.02 : 0.95 + Math.random() * 0.035) * (hardMode ? 1.02 : 1);
     // fluctuating top-speed limiter, in shown units
@@ -1530,11 +1536,13 @@ function startGame(def, m) {
   $('trackLabel').textContent = def.name;
   updateHUD();
   if (typeof sendTrackToPhone === 'function') sendTrackToPhone();   // new track outline -> phone minimap
+  initAudio(); startMusic(def);                                     // per-track music (speeds up on last lap)
   clock.getDelta();
 }
 
 function endRace() {
   state = 'results';
+  stopMusic();
   const standings = [...cars].sort((a, b) => {
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     if (a.finished) return a.finishTime - b.finishTime;
@@ -1555,6 +1563,7 @@ function endRace() {
 
 function backToMenu() {
   state = 'menu';
+  stopMusic();
   $('results').style.display = 'none';
   $('pause').style.display = 'none';
   $('hud').style.display = 'none';
@@ -1594,6 +1603,8 @@ function onLapComplete(car) {
   }
   car.lapStart = now;
   car.lap++;
+  // player just started the final lap -> ramp the music up
+  if (car.isPlayer && mode === 'race' && car.lap === track.def.laps - 1) setMusicFinalLap(true);
   if (mode === 'race' && car.lap >= track.def.laps && !car.finished) {
     car.finished = true;
     car.finishTime = raceTime;
@@ -1663,9 +1674,96 @@ function initAudio() {
     noise.connect(nFilt); nFilt.connect(nGain); nGain.connect(master);
     noise.start();
 
-    Object.assign(audio, { ctx, master, sub, eng, eng2, harm, harm3, gH3, gHarm, filt, trem, lfo, lfoDepth, engGain, inGain, inFilt, nGain });
+    // separate bus for the procedural music so it mixes under the engine
+    const musicGain = ctx.createGain(); musicGain.gain.value = 0.34;
+    musicGain.connect(master);
+
+    Object.assign(audio, { ctx, master, musicGain, sub, eng, eng2, harm, harm3, gH3, gHarm, filt, trem, lfo, lfoDepth, engGain, inGain, inFilt, nGain });
   } catch (e) { /* no audio */ }
 }
+
+// ---------------------------------------------------------------- procedural music
+// Per-track chiptune loops built from oscillators; tempo ramps up on the final lap.
+const MUSIC = { playing: false, step: 0, bpm: 120, baseBpm: 120, nextT: 0, song: null, timer: null };
+const SCALES = {
+  minor:  [0, 2, 3, 5, 7, 8, 10], dorian: [0, 2, 3, 5, 7, 9, 10],
+  major:  [0, 2, 4, 5, 7, 9, 11], mixo:   [0, 2, 4, 5, 7, 9, 10],
+  penta:  [0, 3, 5, 7, 10],       pentaM: [0, 2, 4, 7, 9],
+};
+// per-track: root MIDI, scale, bpm, lead/bass waveforms, 4-bar chord roots (semitone offsets), drum feel
+const SONGS = {
+  indy:       { root: 45, scale: 'major',  bpm: 140, lead: 'square',   bass: 'sawtooth', chords: [0, 0, 7, 5],  drive: 1 },
+  monza:      { root: 43, scale: 'minor',  bpm: 150, lead: 'sawtooth', bass: 'square',   chords: [0, 5, 3, 7],  drive: 1 },
+  monaco:     { root: 44, scale: 'dorian', bpm: 116, lead: 'triangle', bass: 'sawtooth', chords: [0, 3, 5, 7],  drive: 0 },
+  silverstone:{ root: 47, scale: 'major',  bpm: 132, lead: 'square',   bass: 'triangle', chords: [0, 7, 9, 5],  drive: 1 },
+  suzuka:     { root: 45, scale: 'pentaM', bpm: 128, lead: 'triangle', bass: 'sawtooth', chords: [0, 5, 7, 5],  drive: 0 },
+  homestead:  { root: 46, scale: 'mixo',   bpm: 120, lead: 'triangle', bass: 'triangle', chords: [0, 5, 7, 5],  drive: 0 },
+  coast:      { root: 48, scale: 'major',  bpm: 126, lead: 'square',   bass: 'sawtooth', chords: [0, 9, 5, 7],  drive: 1 },
+  tech:       { root: 41, scale: 'minor',  bpm: 152, lead: 'sawtooth', bass: 'square',   chords: [0, 3, 7, 8],  drive: 1 },
+  alpine:     { root: 43, scale: 'minor',  bpm: 124, lead: 'triangle', bass: 'sawtooth', chords: [0, 8, 5, 3],  drive: 0 },
+  baja:       { root: 45, scale: 'penta',  bpm: 138, lead: 'square',   bass: 'sawtooth', chords: [0, 0, 5, 7],  drive: 1 },
+};
+function midiHz(m) { return 440 * Math.pow(2, (m - 69) / 12); }
+function musicNote(freq, dur, type, gain, when) {
+  const ctx = audio.ctx, o = ctx.createOscillator(), g = ctx.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(gain, when + 0.008);
+  g.gain.exponentialRampToValueAtTime(0.0008, when + dur);
+  o.connect(g); g.connect(audio.musicGain);
+  o.start(when); o.stop(when + dur + 0.02);
+}
+function musicDrum(kind, when) {
+  const ctx = audio.ctx;
+  if (kind === 'kick') {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.setValueAtTime(150, when); o.frequency.exponentialRampToValueAtTime(48, when + 0.12);
+    g.gain.setValueAtTime(0.9, when); g.gain.exponentialRampToValueAtTime(0.001, when + 0.16);
+    o.connect(g); g.connect(audio.musicGain); o.start(when); o.stop(when + 0.18);
+  } else { // hat/snare = filtered noise
+    const dur = kind === 'snare' ? 0.14 : 0.03;
+    const buf = ctx.createBuffer(1, ctx.sampleRate * dur, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const s = ctx.createBufferSource(); s.buffer = buf;
+    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = kind === 'snare' ? 1400 : 7000;
+    const g = ctx.createGain(); g.gain.setValueAtTime(kind === 'snare' ? 0.5 : 0.28, when); g.gain.exponentialRampToValueAtTime(0.001, when + dur);
+    s.connect(f); f.connect(g); g.connect(audio.musicGain); s.start(when); s.stop(when + dur);
+  }
+}
+function musicTick() {
+  if (!MUSIC.playing || !audio.ctx) return;
+  const spb = 60 / MUSIC.bpm / 4;                 // seconds per 16th step
+  const now = audio.ctx.currentTime;
+  // schedule any steps due within the next lookahead
+  while (MUSIC.nextT < now + 0.12) {
+    const t = MUSIC.nextT, s = MUSIC.step, song = MUSIC.song;
+    const scale = SCALES[song.scale], bar = Math.floor(s / 16) % 4, chordRoot = song.root + song.chords[bar];
+    // drums
+    if (s % 4 === 0) musicDrum('kick', t);
+    if (s % 8 === 4) musicDrum('snare', t);
+    if (s % 2 === 1) musicDrum('hat', t);
+    // bass on the beat + a little walk
+    if (s % 4 === 0 || s % 8 === 6) musicNote(midiHz(chordRoot - 12), spb * (s % 4 === 0 ? 3.6 : 1.6), song.bass, 0.5, t);
+    // lead arpeggio (chord tones + passing notes), busier when 'drive'
+    if (s % 2 === 0 || (song.drive && s % 4 === 3)) {
+      const deg = [0, 2, 4, 6, 4, 2][(s / 1) % 6 | 0] % scale.length;
+      const oct = 12 * (1 + ((s >> 3) & 1));
+      musicNote(midiHz(chordRoot + scale[deg] + oct), spb * 1.4, song.lead, 0.22, t);
+    }
+    MUSIC.step = (s + 1) % 64;
+    MUSIC.nextT += spb;
+  }
+}
+function startMusic(def) {
+  if (!audio.ctx) return;
+  MUSIC.song = SONGS[def.id] || { root: 45, scale: 'minor', bpm: 124, lead: 'square', bass: 'sawtooth', chords: [0, 5, 3, 7], drive: 0 };
+  MUSIC.baseBpm = MUSIC.bpm = MUSIC.song.bpm;
+  MUSIC.step = 0; MUSIC.nextT = audio.ctx.currentTime + 0.1; MUSIC.playing = true;
+  if (audio.musicGain) audio.musicGain.gain.value = muted ? 0 : 0.34;
+  if (!MUSIC.timer) MUSIC.timer = setInterval(musicTick, 40);
+}
+function stopMusic() { MUSIC.playing = false; if (MUSIC.timer) { clearInterval(MUSIC.timer); MUSIC.timer = null; } }
+function setMusicFinalLap(on) { MUSIC.bpm = on ? Math.round(MUSIC.baseBpm * 1.28) : MUSIC.baseBpm; }
 function updateAudio(dt) {
   if (!audio.ctx || !player) return;
   const active = state === 'race' || state === 'tt' || state === 'countdown';
