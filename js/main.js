@@ -66,6 +66,7 @@ let camMode = CAM_CHASE;
 let muted = false;
 let steerInvert = localStorage.getItem('apex_steerInvert') === '1';
 let mouseThrottle = false, mouseBrake = false;   // click-and-hold pedals (held state)
+let gasPedal = false;                            // gas-pedal TOGGLE latch (momentary 2nd-mouse device)
 let throttlePedal = 0, brakePedal = 0;           // analog pedal travel — eases in/out, not on/off
 const DIAG = { n: 0, last: '(no input yet)', log: [], thr: 0, brk: 0 };   // TEMP diagnostic — remove after pedal confirmed
 // gyroSteer + phoneConnected live in pair.js (phone controller)
@@ -165,34 +166,38 @@ function boot() {
   });
   // Two very different pedal devices, handled by button:
   //   * DESKTOP mouse = LEFT button (0): press-and-HOLD (down=on, up=off). Works cleanly.
-  //   * GAS pedal = a 2nd mouse sending a NON-left button (middle/back/forward). That device
-  //     reports its button as RELEASED even while physically held (phantom ups, buttons:0), so
-  //     HOLD flickers the throttle -> car crawls at 4mph. So the gas pedal is a TOGGLE: each
-  //     press flips throttle on/off, and its up events are IGNORED (can't flicker).
+  //   * GAS pedal = a 2nd "momentary" mouse (non-left button). CONFIRMED behaviour: it fires
+  //     1-2 events ONLY on press (~100ms apart), and NOTHING on hold or release. So it can't do
+  //     hold — it's a TOGGLE: each PHYSICAL press flips throttle on/off. The two events of one
+  //     press are collapsed by a 320ms debounce so a press = exactly ONE toggle (the old 90ms
+  //     window let the 2nd event flip it back off -> "can't re-accelerate").
   //   * RIGHT button (2) = brake (hold).
-  // Throttle is ON if the left button is held OR the toggle latch is set.
-  let leftHeld = false, pedalToggle = false, lastToggle = -1e9;
-  const syncThrottle = () => { mouseThrottle = leftHeld || pedalToggle; };
-  const releasePedals = () => { leftHeld = pedalToggle = false; mouseThrottle = mouseBrake = false; };
+  // Throttle is ON if the left button is held OR the toggle latch is set. gasPedal exposed for the HUD.
+  let leftHeld = false, lastToggle = -1e9;
+  const syncThrottle = () => { mouseThrottle = leftHeld || gasPedal; };
+  const releasePedals = () => { leftHeld = gasPedal = false; mouseThrottle = mouseBrake = false; };
   const onDown = e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
     if (e.button === 2) mouseBrake = true;                   // right = brake
     else if (e.button === 0) leftHeld = true;                // desktop mouse: hold
-    else {                                                    // gas pedal (odd button): toggle, debounced vs bounce
+    else {                                                    // gas pedal: one toggle per press (collapse the 1-2 events)
       const now = performance.now();
-      if (now - lastToggle > 90) { pedalToggle = !pedalToggle; lastToggle = now; }
+      if (now - lastToggle > 320) { gasPedal = !gasPedal; lastToggle = now; }
     }
     syncThrottle();
   };
-  const onUp = e => {   // never reads buttons on move; gas-pedal ups ignored (toggle-only)
+  const onUp = e => {   // never reads buttons on move; gas-pedal has no release signal (toggle-only)
     if (e.button === 0 || !(e.buttons & 1)) leftHeld = false;
     if (e.button === 2 || !(e.buttons & 2)) mouseBrake = false;
     syncThrottle();
   };
-  addEventListener('pointerdown', onDown);                   // ONLY pointerdown engages (mousedown would double-toggle)
+  // bind BOTH pointerdown and mousedown — a single press may fire either/both; the 320ms
+  // debounce collapses them to one toggle, and covers devices that only emit legacy mouse events.
+  addEventListener('pointerdown', onDown);
+  addEventListener('mousedown', onDown);
   addEventListener('pointerup', onUp);
-  addEventListener('mouseup', onUp);                         // release is idempotent, safe to double-bind
+  addEventListener('mouseup', onUp);
   addEventListener('pointercancel', releasePedals);
   addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
   // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
@@ -1638,6 +1643,7 @@ function renderDiag() {
   _diagEl.innerHTML =
     `BUILD v=${ver}\n`
     + `<b style="font-size:16px;color:${vcolor}">${verdict}</b>\n`
+    + `<b style="font-size:22px;color:${gasPedal ? '#3f6' : '#f66'}">GAS PEDAL: ${gasPedal ? 'ON' : 'OFF'}</b>  <span style="opacity:.7">(click gas mouse to flip)</span>\n`
     + `<b style="font-size:20px;color:#ffd23e">throttle=${(DIAG.thr || 0).toFixed(2)}  brake=${(DIAG.brk || 0).toFixed(2)}</b>\n`
     + `<b style="font-size:20px;color:#6cf">SPEED=${spd}  FPS=${fps}</b>\n`
     + `state=${state}  mThrottle=${mouseThrottle ? 1 : 0}  keyW=${keys['w'] ? 1 : 0}\n`
