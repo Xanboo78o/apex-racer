@@ -184,8 +184,12 @@ function boot() {
   });
   addEventListener('pointercancel', releasePedals);
   addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
-  addEventListener('blur', releasePedals);                  // focus lost -> release pedals
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releasePedals(); });
+  // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
+  // window blurs before keyup, keys['w'] latches ON forever and throttle = max(kThr, pedal) pins at
+  // 1.00 regardless of the mouse (the "throttle stuck, release does nothing" bug).
+  const releaseAllControls = () => { releasePedals(); for (const k in keys) keys[k] = false; };
+  addEventListener('blur', releaseAllControls);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllControls(); });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
   // TEMP DIAGNOSTIC overlay — records raw pointer/mouse/touch events so we can see what THIS
   // browser actually reports. Remove once the pedal is confirmed working.
@@ -1514,9 +1518,11 @@ function renderDiag() {
 
   // plain-English self-diagnosis
   let verdict, vcolor;
+  const kw = (keys['w'] || keys['arrowup']) ? 1 : 0;
   if (fps > 0 && fps < 20) { verdict = `⚠ RUNNING SLOW — ${fps} FPS. Click this window to focus it!`; vcolor = '#f66'; }
   else if (state === 'countdown') { verdict = 'countdown… (waiting for GO)'; vcolor = '#fd6'; }
   else if (state !== 'race' && state !== 'tt') { verdict = 'not racing (state=' + state + ')'; vcolor = '#fd6'; }
+  else if (kw && !mouseThrottle) { verdict = "⚠ keyboard 'W' STUCK on — tap W once, or refresh"; vcolor = '#f66'; }
   else if ((DIAG.thr || 0) > 0.5 && spd < 8) { verdict = '⚠ throttle ON but not moving — screenshot this'; vcolor = '#f66'; }
   else { verdict = `OK — ${fps} FPS`; vcolor = '#6f6'; }
 
