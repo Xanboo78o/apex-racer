@@ -50,7 +50,7 @@ const ENVS = {
   desert: { ground: 0xd6ad6a, ground2: 0xc09452, sky: 0xf3dcab, top: 0x6f9fd6, horizon: 0xf6e6bf, fog: 1500, scatter: 'rocks', dense: 0.6 },
   city:   { ground: 0x6a707a, ground2: 0x585e68, sky: 0xc2cee0, top: 0x6a7a94, horizon: 0xd4dde8, fog: 1300, scatter: 'buildings', dense: 0.5 },
   // rural New Hampshire: patchwork fields, forest, scattered farms, a river. Composite scatter.
-  countryside: { ground: 0x6fae43, ground2: 0x548a31, sky: 0x9fd2ff, top: 0x2f74cf, horizon: 0xcfe8ff, fog: 1900, scatter: 'countryside', dense: 0.85 },
+  countryside: { ground: 0x6fae43, ground2: 0x548a31, sky: 0x9fd2ff, top: 0x2f74cf, horizon: 0xcfe8ff, fog: 2100, scatter: 'countryside', dense: 1.15 },
   oval:   { ground: 0x62ab3e, ground2: 0x4d8a30, sky: 0x9fd2ff, top: 0x2f74cf, horizon: 0xcfe8ff, fog: 2000, scatter: 'stands', dense: 0.7 },
 };
 
@@ -830,17 +830,24 @@ function drapedPatch(cx, cz, w, d, yaw, color, yLift) {
 }
 function buildFields(scatterPos) {
   const crops = [0xcdb45a, 0xd8c56a, 0x8a6a44, 0x9c7a4e, 0x7ea63e, 0x5f8a34, 0xa8b357]; // wheat, tilled, crops
-  for (let i = 0; i < 30; i++) {
+  // scale field count to the track's footprint so a big map doesn't look bare
+  let nx = 1e9, xx = -1e9, nz = 1e9, xz = -1e9;
+  for (const s of track.samples) { nx = Math.min(nx, s.x); xx = Math.max(xx, s.x); nz = Math.min(nz, s.z); xz = Math.max(xz, s.z); }
+  const n = Math.max(30, Math.min(90, Math.round((xx - nx) * (xz - nz) / 60000)));
+  for (let i = 0; i < n; i++) {
     const p = scatterPos(track.halfW + 55);
     if (!p) continue;
-    drapedPatch(p[0], p[1], rand(120, 300), rand(120, 300), rand(0, 6.28), crops[i % crops.length], 0.05 + Math.random() * 0.06);
+    drapedPatch(p[0], p[1], rand(140, 340), rand(140, 340), rand(0, 6.28), crops[i % crops.length], 0.05 + Math.random() * 0.06);
   }
 }
 function buildFarms(scatterPos) {
   const bodyPal = [0x9c2b25, 0xb8352c, 0xe8e2d4, 0xd8cdb8, 0x7a6a54, 0xcabca4]; // barn red, farmhouse white, wood
   const roofPal = [0x3a3f47, 0x55402f, 0x6a7078, 0x4a4038];
   const box = new THREE.BoxGeometry(1, 1, 1);
-  for (let i = 0; i < 30; i++) {
+  let nx = 1e9, xx = -1e9, nz = 1e9, xz = -1e9;
+  for (const s of track.samples) { nx = Math.min(nx, s.x); xx = Math.max(xx, s.x); nz = Math.min(nz, s.z); xz = Math.max(xz, s.z); }
+  const nFarms = Math.max(30, Math.min(70, Math.round((xx - nx) * (xz - nz) / 90000)));
+  for (let i = 0; i < nFarms; i++) {
     const p = scatterPos(track.halfW + 20);
     if (!p) continue;
     const w = rand(11, 24), d = rand(11, 30), h = rand(6, 12);
