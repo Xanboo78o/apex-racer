@@ -308,10 +308,22 @@ async function connectHid(dev, which) {
   try {
     if (!dev.opened) await dev.open();
     if (which === 'gas') hidGasDev = dev; else hidBrakeDev = dev;
-    // any report = the pedal is active/being pushed; stamp the time (evaluated with HID_TIMEOUT)
-    dev.oninputreport = () => {
-      const t = performance.now();
-      if (which === 'gas') hidGasLast = t; else hidBrakeLast = t;
+    // IMPORTANT: mice stream reports continuously even when idle, so we can't treat "a report
+    // arrived" as "being pushed" (that never stops -> infinite throttle). Instead look at the
+    // report CONTENT: a button held (byte0 low bits) OR real movement (any later byte nonzero).
+    // Idle/zero reports do NOT count, so lifting off makes the content go quiet -> pedal releases.
+    dev.oninputreport = (e) => {
+      const d = e.data;
+      let active = (d.byteLength ? d.getUint8(0) : 0) & 0x07;   // left|right|middle button held
+      for (let i = 1; !active && i < d.byteLength; i++) if (d.getUint8(i) !== 0) active = 1;  // any movement/scroll
+      if (active) { const t = performance.now(); if (which === 'gas') hidGasLast = t; else hidBrakeLast = t; }
+      // live monitor (only while Settings is open) so we can see the raw report
+      const mon = document.getElementById('pedalMon');
+      if (mon && $('settingsModal').style.display === 'flex') {
+        const bytes = []; for (let i = 0; i < Math.min(d.byteLength, 6); i++) bytes.push(d.getUint8(i).toString(16).padStart(2, '0'));
+        mon._n = (mon._n || 0) + 1;
+        mon.textContent = `${which}: rid=${e.reportId} bytes=[${bytes.join(' ')}] active=${active ? 1 : 0} reports=${mon._n}`;
+      }
     };
     return true;
   } catch (e) { return false; }
