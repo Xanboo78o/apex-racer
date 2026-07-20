@@ -67,7 +67,7 @@ let muted = false;
 let steerInvert = localStorage.getItem('apex_steerInvert') === '1';
 let mouseThrottle = false, mouseBrake = false;   // click-and-hold pedals (held state)
 let throttlePedal = 0, brakePedal = 0;           // analog pedal travel — eases in/out, not on/off
-const DIAG = { n: 0, last: '(no pointer events yet)', thr: 0, brk: 0 };   // TEMP diagnostic — remove after pedal confirmed
+const DIAG = { n: 0, last: '(no input yet)', log: [], thr: 0, brk: 0 };   // TEMP diagnostic — remove after pedal confirmed
 // gyroSteer + phoneConnected live in pair.js (phone controller)
 let GRAD = null, OUTLINE_MAT = null;
 const keys = {};
@@ -195,15 +195,15 @@ function boot() {
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
   // TEMP DIAGNOSTIC overlay — records raw pointer/mouse/touch events so we can see what THIS
   // browser actually reports. Remove once the pedal is confirmed working.
+  const diagPush = s => { DIAG.n++; DIAG.last = s; DIAG.log.unshift(DIAG.n + ': ' + s); if (DIAG.log.length > 6) DIAG.log.pop(); };
   ['pointerdown','pointerup','pointermove','mousedown','mouseup','touchstart','touchend'].forEach(t =>
     addEventListener(t, e => {
       if (t === 'pointermove' && !(e.buttons & 3)) return;   // only log moves while a button is held
-      DIAG.n++;
-      DIAG.last = `${t} btn=${e.button ?? '-'} bts=${e.buttons ?? '-'} pt=${e.pointerType || '-'} tt=${(e.target && e.target.tagName) || '?'}`;
+      diagPush(`${t} btn=${e.button ?? '-'} bts=${e.buttons ?? '-'} id=${e.pointerId ?? '-'}`);
     }, true));
   // also capture keyboard — a "pedal" device may actually emit a key, not a mouse click
   ['keydown', 'keyup'].forEach(t =>
-    addEventListener(t, e => { DIAG.n++; DIAG.last = `${t} key="${e.key}" code=${e.code}`; }, true));
+    addEventListener(t, e => diagPush(`${t} key="${e.key}" code=${e.code}`), true));
   updateInvertBtn();
   startAccountFlow(() => buildMenu());
   requestAnimationFrame(loop);
@@ -1632,7 +1632,8 @@ function renderDiag() {
     + `<b style="font-size:20px;color:#ffd23e">throttle=${(DIAG.thr || 0).toFixed(2)}  brake=${(DIAG.brk || 0).toFixed(2)}</b>\n`
     + `<b style="font-size:20px;color:#6cf">SPEED=${spd}  FPS=${fps}</b>\n`
     + `state=${state}  mThrottle=${mouseThrottle ? 1 : 0}  keyW=${keys['w'] ? 1 : 0}\n`
-    + `throttlePedal=${(throttlePedal || 0).toFixed(2)}  dt=${DIAG.dt}  frames=${DIAG.frames}`;
+    + `<b style="color:#8ef">--- last inputs (newest first) ---</b>\n`
+    + (DIAG.log.length ? DIAG.log.join('\n') : '(click your gas mouse)');
 }
 function loop() {
   requestAnimationFrame(loop);
