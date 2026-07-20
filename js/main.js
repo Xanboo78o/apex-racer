@@ -160,28 +160,28 @@ function boot() {
     if (e.code === 'Space') keys[' '] = false;
   });
   // click / press-and-hold = throttle (left button = gas, right button = brake).
-  // The pedal state is DERIVED from which buttons are physically down (e.buttons) on EVERY
-  // pointer event — press, move, and release. This is the bulletproof pattern: even if a
-  // discrete pointerup is missed (pointer-capture on some browsers swallowed it, which stuck
-  // the throttle ON), the very next move — or the up itself — sees the button bit cleared and
-  // lets the pedal off immediately. No setPointerCapture (that was the thing sticking it on).
-  // `pedalArmed` gates it so a click that STARTS on a UI control (a menu button) doesn't rev.
-  let pedalArmed = false;
-  const syncPedals = e => {
-    mouseThrottle = pedalArmed && !!(e.buttons & 1);   // bit 0 = left button
-    mouseBrake    = pedalArmed && !!(e.buttons & 2);   // bit 1 = right button
-  };
-  const releasePedals = () => { mouseThrottle = mouseBrake = false; pedalArmed = false; };
+  // Held state is set on DISCRETE pointerdown and cleared on DISCRETE pointerup, matched by
+  // e.button. Two hard rules, each learned from a real stuck-pedal bug:
+  //   1. NEVER read e.buttons on pointermove. On this user's setup pointermove reports
+  //      buttons:0 while the button is still physically held, so deriving state from it cut
+  //      the throttle the instant the mouse moved ("can't accel past ~4mph").
+  //   2. NO setPointerCapture. On some browsers capture SWALLOWS the pointerup, so releasing
+  //      never registered and the throttle stuck ON. Plain in-window pointerup is reliable.
+  // Off-window / focus-loss releases are covered by the safety nets below (blur / leave /
+  // hidden / cancel) — none of which read the flaky buttons field.
+  const releasePedals = () => { mouseThrottle = mouseBrake = false; };
   addEventListener('pointerdown', e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
-    pedalArmed = true;
-    syncPedals(e);
+    if (e.button === 0) mouseThrottle = true;                // left = gas
+    else if (e.button === 2) mouseBrake = true;              // right = brake
   });
-  addEventListener('pointermove', e => { if (pedalArmed) syncPedals(e); });   // catches any missed release
-  addEventListener('pointerup', e => { if (pedalArmed) syncPedals(e); if (!(e.buttons & 3)) pedalArmed = false; });
+  addEventListener('pointerup', e => {
+    if (e.button === 0) mouseThrottle = false;
+    else if (e.button === 2) mouseBrake = false;
+  });
   addEventListener('pointercancel', releasePedals);
-  addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off
+  addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
   addEventListener('blur', releasePedals);                  // focus lost -> release pedals
   document.addEventListener('visibilitychange', () => { if (document.hidden) releasePedals(); });
   addEventListener('contextmenu', e => { if (state === 'race' || state === 'tt') e.preventDefault(); });
