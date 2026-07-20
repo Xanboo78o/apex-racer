@@ -164,42 +164,32 @@ function boot() {
     keys[e.key.toLowerCase()] = false;
     if (e.code === 'Space') keys[' '] = false;
   });
-  // Two very different pedal devices, handled by button:
-  //   * DESKTOP mouse = LEFT button (0): press-and-HOLD (down=on, up=off). Works cleanly.
-  //   * GAS pedal = a 2nd "momentary" mouse (non-left button). CONFIRMED behaviour: it fires
-  //     1-2 events ONLY on press (~100ms apart), and NOTHING on hold or release. So it can't do
-  //     hold — it's a TOGGLE: each PHYSICAL press flips throttle on/off. The two events of one
-  //     press are collapsed by a 320ms debounce so a press = exactly ONE toggle (the old 90ms
-  //     window let the 2nd event flip it back off -> "can't re-accelerate").
-  //   * RIGHT button (2) = brake (hold).
-  // Throttle is ON if the left button is held OR the toggle latch is set. gasPedal exposed for the HUD.
-  let leftHeld = false, lastToggle = -1e9;
-  const syncThrottle = () => { mouseThrottle = leftHeld || gasPedal; };
-  const releasePedals = () => { leftHeld = gasPedal = false; mouseThrottle = mouseBrake = false; };
+  // BOTH mice report on LEFT button (0); telling them apart by TIMING:
+  //   * DESKTOP mouse = a real HOLD: button down, held >140ms, up on release -> throttle while held.
+  //   * GAS pedal = a momentary "click" device: fires down+up together (<140ms) on each press,
+  //     nothing on real release, and ONLY legacy mouse events. A quick click flips the latch.
+  //   * RIGHT button (2) = brake.
+  // Throttle ON = (button currently held) OR (latch set). gasPedal (latch) is exposed for the HUD.
+  // Bind ONLY legacy mouse events (both mice emit them) so there's no pointer+mouse double-fire.
+  let heldDown = false, downAt = -1e9;
+  const syncThrottle = () => { mouseThrottle = heldDown || gasPedal; };
+  const releasePedals = () => { heldDown = gasPedal = false; mouseThrottle = mouseBrake = false; };
   const onDown = e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
-    if (e.button === 2) mouseBrake = true;                   // right = brake
-    else if (e.button === 0) leftHeld = true;                // desktop mouse: hold
-    else {                                                    // gas pedal: one toggle per press (collapse the 1-2 events)
-      const now = performance.now();
-      if (now - lastToggle > 320) { gasPedal = !gasPedal; lastToggle = now; }
-    }
+    if (e.button === 2) { mouseBrake = true; return; }       // right = brake
+    heldDown = true; downAt = performance.now();             // any other button = gas (hold begins)
     syncThrottle();
   };
-  const onUp = e => {   // never reads buttons on move; gas-pedal has no release signal (toggle-only)
-    if (e.button === 0 || !(e.buttons & 1)) leftHeld = false;
-    if (e.button === 2 || !(e.buttons & 2)) mouseBrake = false;
-    syncThrottle();
+  const onUp = e => {
+    if (e.button === 2) { mouseBrake = false; return; }
+    const held = performance.now() - downAt;
+    heldDown = false;
+    if (held < 140) gasPedal = !gasPedal;                    // quick click (gas pedal) -> flip the latch
+    syncThrottle();                                          // a real hold-release just drops heldDown
   };
-  // bind BOTH pointerdown and mousedown — a single press may fire either/both; the 320ms
-  // debounce collapses them to one toggle, and covers devices that only emit legacy mouse events.
-  addEventListener('pointerdown', onDown);
   addEventListener('mousedown', onDown);
-  addEventListener('pointerup', onUp);
   addEventListener('mouseup', onUp);
-  addEventListener('pointercancel', releasePedals);
-  addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
   // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
   // window blurs before keyup, keys['w'] latches ON forever and throttle = max(kThr, pedal) pins at
   // 1.00 regardless of the mouse (the "throttle stuck, release does nothing" bug).
