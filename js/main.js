@@ -163,27 +163,29 @@ function boot() {
     keys[e.key.toLowerCase()] = false;
     if (e.code === 'Space') keys[' '] = false;
   });
-  // click / press-and-hold = throttle (left = gas, right = brake). Balancing two real devices:
-  //   * the desk mouse reports buttons:0 on some pointerMOVES while a button is physically held,
-  //     so reading buttons on move CUT the throttle ("can't accel past 4mph"). => NEVER read
-  //     buttons on pointermove.
-  //   * the pedal (a 2nd mouse) fires pointerdown on press but a flaky/odd-button release, so
-  //     matching an exact e.button===0 up MISSED it and the gas latched on. => release on ANY
-  //     pointerup/mouseup, keyed by the buttons bitmask OR the button number (lenient).
-  // ENGAGE only on discrete pointerdown; RELEASE on discrete up (never on move).
+  // click / press-and-hold pedal. The user's GAS pedal is a 2nd mouse that sends a NON-left
+  // button (middle/back/forward), so keying gas to exactly button 0 ignored it entirely. Fix:
+  // RIGHT button (2) = brake; ANY OTHER button (left/middle/back/forward) = gas. Desk mouse's
+  // left-click still works. Rules kept from prior bugs:
+  //   * NEVER read e.buttons on pointermove (desk mouse reports buttons:0 on move-while-held ->
+  //     would cut the throttle to 4mph).
+  //   * RELEASE from the buttons bitmask on up (lenient), so an odd-button device still lets off.
+  const THR_BITS = 0x1D;   // bits 0,2,3,4 = left|middle|back|forward (everything except right=bit1)
   const releasePedals = () => { mouseThrottle = mouseBrake = false; };
-  addEventListener('pointerdown', e => {
+  const onDown = e => {
     initAudio();                                              // any gesture unlocks WebAudio
     if (e.target.closest && e.target.closest('button, a, input, select, textarea')) return;  // UI: don't rev
-    if (e.button === 0) mouseThrottle = true;                // left / primary = gas
-    else if (e.button === 2) mouseBrake = true;              // right = brake
-  });
-  const onUp = e => {   // lenient: clears if that button released OR its bit is no longer held
-    if (e.button === 0 || !(e.buttons & 1)) mouseThrottle = false;
-    if (e.button === 2 || !(e.buttons & 2)) mouseBrake = false;
+    if (e.button === 2) mouseBrake = true;                   // right = brake
+    else mouseThrottle = true;                               // any other button = gas
   };
+  const onUp = e => {   // derive from which buttons remain held (lenient; never reads on move)
+    if (!(e.buttons & THR_BITS)) mouseThrottle = false;
+    if (!(e.buttons & 2)) mouseBrake = false;
+  };
+  addEventListener('pointerdown', onDown);
+  addEventListener('mousedown', onDown);                     // legacy fallback for flaky-PointerEvent devices
   addEventListener('pointerup', onUp);
-  addEventListener('mouseup', onUp);                        // legacy fallback for flaky-PointerEvent devices
+  addEventListener('mouseup', onUp);
   addEventListener('pointercancel', releasePedals);
   addEventListener('pointerleave', releasePedals);          // pointer left the page -> let off (anti stuck-on)
   // Losing focus/visibility must clear the KEYBOARD too, not just the mouse: if you hold W and the
