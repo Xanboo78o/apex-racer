@@ -132,6 +132,7 @@ function ambientHills(x, z, amp) {
 // as an earth berm), then blends out into the open rolling hills.
 function terrainHeight(x, z) {
   if (!track || !track.nearestInfo) return 0;
+  if (track.open && track.heightAt) return track.heightAt(x, z);   // open world: real OSM elevation
   const info = track.nearestInfo(x, z);
   const i = info.i, r = track.rights[i], sp = track.samples[i];
   const hw = track.width ? track.width[i] : track.halfW;   // per-street width in open world
