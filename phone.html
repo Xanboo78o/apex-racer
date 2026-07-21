@@ -37,7 +37,8 @@
   button:active { transform: scale(.97); }
   .hidden { display: none !important; }
   #wheel { width: min(46vh, 300px); height: auto; transition: transform .05s linear; }
-  #status { font-size: 15px; font-weight: 600; padding: 7px 16px; border-radius: 20px; background: #1a1e24; }
+  #status { position: fixed; top: calc(12px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+    z-index: 20; font-size: 13px; font-weight: 600; padding: 6px 14px; border-radius: 20px; background: rgba(20,24,30,.72); white-space: nowrap; }
   #status.ok { background: #16351f; color: #7ee59a; }
   #status.err { background: #3a1a1a; color: #f0a0a0; }
   .bar { width: 74vw; max-width: 340px; height: 10px; background: #1a1e24; border-radius: 5px; position: relative; overflow: hidden; }
@@ -64,13 +65,21 @@
     z-index: 20; font-size: 3.4vh; font-weight: 800; color: #fff; text-shadow: 0 2px 6px #000; pointer-events: none;
   }
   #pInfo b { color: #e23b2e; }
-  #pMiniWrap {
-    position: fixed; right: calc(12px + env(safe-area-inset-right)); top: calc(10px + env(safe-area-inset-top));
-    z-index: 20; background: rgba(11,13,16,.55); border: 1px solid #2b3038; border-radius: 10px; padding: 6px; pointer-events: none;
+  /* full-screen live town map */
+  #townMap { position: fixed; inset: 0; z-index: 1; display: block; background: #0f151c; }
+  #phoneSetBtn {
+    position: fixed; top: calc(10px + env(safe-area-inset-top)); right: calc(12px + env(safe-area-inset-right));
+    z-index: 30; width: 54px; height: 54px; min-width: 0; border-radius: 50%; padding: 0; font-size: 24px;
+    background: rgba(20,24,30,.75); border: 1px solid #3a4350; color: #fff;
   }
-  #pMini { display: block; width: 30vh; max-width: 260px; height: auto; }
-  #fsBtn { position: fixed; right: calc(12px + env(safe-area-inset-right)); bottom: calc(12px + env(safe-area-inset-bottom));
-    z-index: 20; width: auto; padding: 12px 16px; font-size: 15px; background: #2b3038; }
+  #phoneSettings {
+    position: fixed; inset: 0; z-index: 50; background: rgba(8,10,13,.95); backdrop-filter: blur(5px);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 20px; overflow-y: auto;
+  }
+  #phoneSettings.hidden { display: none !important; }
+  #phoneSettings h1 { font-size: 24px; margin-bottom: 2px; }
+  #closeSetBtn { margin-top: 6px; }
+  #fsBtn { background: #2b3038; }
   /* brake pad — big touch target, side chosen by the game */
   #brakeBtn {
     display: none; position: fixed; bottom: calc(20px + env(safe-area-inset-bottom));
@@ -104,41 +113,45 @@
     <p class="muted" id="connErr"></p>
   </div>
 
-  <!-- Step 2: driving -->
+  <!-- Step 2: driving — full-screen live map + minimal HUD; controls live in the ⚙ menu -->
   <div id="driveView" class="hidden">
-    <!-- live HUD mirrored from the game -->
+    <canvas id="townMap"></canvas>
     <div id="pInfo"><span id="pPos">P1</span> &nbsp;·&nbsp; <span id="pLap">Lap 1</span></div>
-    <div id="pMiniWrap"><canvas id="pMini" width="240" height="180"></canvas></div>
     <div id="pSpeedo"><span id="pSpeed">0</span><small>km/h</small></div>
-    <button class="sec" id="fsBtn">⛶ Fullscreen</button>
     <button id="brakeBtn">BRAKE</button>
-
+    <button id="phoneSetBtn" aria-label="controls">⚙</button>
     <div id="status">Connecting…</div>
-    <svg id="wheel" viewBox="0 0 200 200">
-      <circle cx="100" cy="100" r="92" fill="none" stroke="#16181c" stroke-width="16"/>
-      <circle cx="100" cy="100" r="92" fill="none" stroke="#2b2f36" stroke-width="12"/>
-      <circle cx="100" cy="100" r="26" fill="#16181c" stroke="#2b2f36" stroke-width="4"/>
-      <rect x="94" y="100" width="12" height="70" rx="4" fill="#2b2f36"/>
-      <rect x="30" y="94" width="70" height="12" rx="4" fill="#2b2f36"/>
-      <rect x="100" y="94" width="70" height="12" rx="4" fill="#2b2f36"/>
-      <circle cx="100" cy="100" r="10" fill="#e23b2e"/>
-      <rect x="86" y="16" width="28" height="14" rx="7" fill="#e23b2e"/>
-    </svg>
-    <div class="bar"><div class="fill" id="steerFill"></div></div>
-    <div class="row">
+
+    <!-- controls settings menu -->
+    <div id="phoneSettings" class="hidden">
+      <h1>Controls</h1>
+      <svg id="wheel" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="92" fill="none" stroke="#16181c" stroke-width="16"/>
+        <circle cx="100" cy="100" r="92" fill="none" stroke="#2b2f36" stroke-width="12"/>
+        <circle cx="100" cy="100" r="26" fill="#16181c" stroke="#2b2f36" stroke-width="4"/>
+        <rect x="94" y="100" width="12" height="70" rx="4" fill="#2b2f36"/>
+        <rect x="30" y="94" width="70" height="12" rx="4" fill="#2b2f36"/>
+        <rect x="100" y="94" width="70" height="12" rx="4" fill="#2b2f36"/>
+        <circle cx="100" cy="100" r="10" fill="#e23b2e"/>
+        <rect x="86" y="16" width="28" height="14" rx="7" fill="#e23b2e"/>
+      </svg>
+      <div class="bar"><div class="fill" id="steerFill"></div></div>
+      <div class="ctrl">
+        <label>Sensitivity <input type="range" id="sens" min="10" max="70" value="28"></label>
+        <label>Invert steering <input type="checkbox" id="invert"></label>
+      </div>
       <button class="sec" id="calibBtn">Center / Calibrate</button>
+      <button class="sec" id="fsBtn">⛶ Fullscreen</button>
       <button class="sec" id="discBtn">Disconnect</button>
-    </div>
-    <div class="ctrl">
-      <label>Sensitivity <input type="range" id="sens" min="10" max="70" value="28"></label>
-      <label>Invert <input type="checkbox" id="invert"></label>
+      <button id="closeSetBtn">Done</button>
     </div>
   </div>
 
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=1784652873"></script>
-<script src="js/phone.js?v=1784652873"></script>
+<script src="js/config.js?v=1784653324"></script>
+<script src="js/pembroke.js?v=1784653324"></script>
+<script src="js/phone.js?v=1784653324"></script>
 </body>
 </html>

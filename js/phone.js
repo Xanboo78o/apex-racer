@@ -53,6 +53,7 @@ async function connect() {
     .on('broadcast', { event: 'track' }, ({ payload }) => buildPhoneTrack(payload))
     .on('broadcast', { event: 'hud' }, ({ payload }) => updatePhoneHud(payload))
     .on('broadcast', { event: 'brakecfg' }, ({ payload }) => setBrakeSide(payload && payload.side))
+    .on('broadcast', { event: 'world' }, () => buildPhoneWorld())
     .subscribe(status => {
       if (status === 'SUBSCRIBED') {
         channel.track({ role: 'phone' });
@@ -69,6 +70,7 @@ async function connect() {
 
   $('connectView').classList.add('hidden');
   $('driveView').classList.remove('hidden');
+  sizeMap();                          // size the full-screen map now that it's visible
   setStatus('', 'Connecting…');
 
   // keep-alive: resend latest steering ~20x/s so the game's watchdog stays happy
@@ -142,7 +144,9 @@ function sendSteer() {
 }
 
 // ---------------------------------------------------------------- controls
-$('calibBtn').addEventListener('click', () => { zero = null; });   // recenter to current hold
+$('phoneSetBtn').addEventListener('click', () => $('phoneSettings').classList.remove('hidden'));
+$('closeSetBtn').addEventListener('click', () => $('phoneSettings').classList.add('hidden'));
+$('calibBtn').addEventListener('click', () => { zero = null; $('phoneSettings').classList.add('hidden'); });   // recenter to current hold
 $('sens').addEventListener('input', e => { sens = +e.target.value; });
 $('invert').addEventListener('change', e => { invert = e.target.checked; });
 $('discBtn').addEventListener('click', () => {
@@ -194,54 +198,70 @@ function sendBrake(v) {
   b.addEventListener('pointerleave', release);
 })();
 
-// ---------------------------------------------------------------- HUD from the game (minimap + speed)
-let trkBase = null, trkScale = null;   // offscreen track outline + its {s,ox,oz} transform
+// ---------------------------------------------------------------- full-screen live map + HUD
+// The phone draws a full-screen map: the whole town network (free-roam, from local PEMBROKE data)
+// OR a race track outline. The game streams the player/car positions via the 'hud' telemetry.
+let mapMode = null, mapT = null, baseCanvas = null, trackPts = null;
+function sizeMap() {
+  const cv = $('townMap'); if (!cv) return;
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(innerWidth * dpr); cv.height = Math.round(innerHeight * dpr);
+  if (mapMode) rebuildBase();
+}
+window.addEventListener('resize', sizeMap);
+function fit(minX, minZ, maxX, maxZ) {
+  const cv = $('townMap'), pad = 18 * (window.devicePixelRatio || 1);
+  const s = Math.min((cv.width - 2 * pad) / (maxX - minX || 1), (cv.height - 2 * pad) / (maxZ - minZ || 1));
+  return { s, ox: (cv.width - (maxX - minX) * s) / 2 - minX * s, oz: (cv.height - (maxZ - minZ) * s) / 2 - minZ * s };
+}
 function buildPhoneTrack(payload) {
   if (!payload || !payload.points || !payload.points.length) return;
-  const cv = $('pMini');
-  trkBase = document.createElement('canvas');
-  trkBase.width = cv.width; trkBase.height = cv.height;
-  trkScale = drawTrackThumb(trkBase, payload.points, 'rgba(255,255,255,0.85)');
+  mapMode = 'track'; trackPts = payload.points; rebuildBase();
 }
-// mirrors main.js drawTrackThumb: fit the control-point loop into the canvas, return {s,ox,oz}.
-function drawTrackThumb(cv, pts, color) {
-  const ctx = cv.getContext('2d');
-  let minX = 1e9, maxX = -1e9, minZ = 1e9, maxZ = -1e9;
-  for (const p of pts) { minX = Math.min(minX, p[0]); maxX = Math.max(maxX, p[0]); minZ = Math.min(minZ, p[1]); maxZ = Math.max(maxZ, p[1]); }
-  const pad = 14;
-  const s = Math.min((cv.width - pad * 2) / (maxX - minX), (cv.height - pad * 2) / (maxZ - minZ));
-  const ox = (cv.width - (maxX - minX) * s) / 2 - minX * s;
-  const oz = (cv.height - (maxZ - minZ) * s) / 2 - minZ * s;
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.lineJoin = 'round';
-  const P = i => pts[(i + pts.length) % pts.length];
-  ctx.beginPath();
-  ctx.moveTo(P(0)[0] * s + ox, P(0)[1] * s + oz);
-  for (let i = 0; i < pts.length; i++) {
-    const a = P(i), b = P(i + 1);
-    const mx = (a[0] + b[0]) / 2 * s + ox, mz = (a[1] + b[1]) / 2 * s + oz;
-    ctx.quadraticCurveTo(a[0] * s + ox, a[1] * s + oz, mx, mz);
+function buildPhoneWorld() {
+  if (!window.PEMBROKE) return;
+  mapMode = 'world'; rebuildBase();
+}
+function rebuildBase() {
+  const cv = $('townMap'); if (!cv.width) return;
+  baseCanvas = document.createElement('canvas'); baseCanvas.width = cv.width; baseCanvas.height = cv.height;
+  const ctx = baseCanvas.getContext('2d'), dpr = window.devicePixelRatio || 1;
+  ctx.fillStyle = '#0f151c'; ctx.fillRect(0, 0, cv.width, cv.height);
+  if (mapMode === 'world') {
+    const P = window.PEMBROKE, b = P.bbox; mapT = fit(b[0], b[1], b[2], b[3]);
+    const T = mapT, X = x => x * T.s + T.ox, Z = z => z * T.s + T.oz;
+    ctx.strokeStyle = '#3a6fc0'; ctx.lineWidth = 3 * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round';   // water
+    for (const w of (P.waterways || [])) { ctx.beginPath(); w.pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))); ctx.stroke(); }
+    ctx.fillStyle = '#2f5f9e'; for (const w of (P.water || [])) { ctx.beginPath(); w.poly.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))); ctx.fill(); }
+    ctx.strokeStyle = '#7e8896'; ctx.lineWidth = 1.4 * dpr;                                                // roads
+    for (const e of P.edges) { const big = /motorway|trunk|primary|secondary/.test(e.cls); ctx.lineWidth = (big ? 2.4 : 1.3) * dpr; ctx.strokeStyle = big ? '#c9d3df' : '#6b7684'; ctx.beginPath(); e.pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))); ctx.stroke(); }
+    ctx.fillStyle = '#e2c34a';                                                                            // schools
+    for (const s of (P.schools || [])) { ctx.beginPath(); ctx.arc(X(s.x), Z(s.z), 5 * dpr, 0, 7); ctx.fill(); }
+  } else if (mapMode === 'track' && trackPts) {
+    let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9; for (const p of trackPts) { mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]); mnz = Math.min(mnz, p[1]); mxz = Math.max(mxz, p[1]); }
+    mapT = fit(mnx, mnz, mxx, mxz); const T = mapT, X = x => x * T.s + T.ox, Z = z => z * T.s + T.oz, pts = trackPts;
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 5 * dpr; ctx.lineJoin = 'round'; ctx.beginPath();
+    const G = i => pts[(i + pts.length) % pts.length]; ctx.moveTo(X(G(0)[0]), Z(G(0)[1]));
+    for (let i = 0; i < pts.length; i++) { const a = G(i), b = G(i + 1); ctx.quadraticCurveTo(X(a[0]), Z(a[1]), X((a[0] + b[0]) / 2), Z((a[1] + b[1]) / 2)); }
+    ctx.closePath(); ctx.stroke();
   }
-  ctx.closePath(); ctx.stroke();
-  ctx.fillStyle = '#ffd23e';
-  ctx.beginPath(); ctx.arc(P(0)[0] * s + ox, P(0)[1] * s + oz, 4, 0, 7); ctx.fill();
-  return { s, ox, oz };
 }
 function updatePhoneHud(p) {
   if (!p) return;
   $('pSpeed').textContent = p.s != null ? p.s : 0;
-  $('pPos').textContent = p.mode === 'race' ? ('P' + p.pos + '/' + (p.cars ? p.cars.length : '')) : 'Time Trial';
-  $('pLap').textContent = 'Lap ' + p.lap + (p.laps ? '/' + p.laps : '');
-  const cv = $('pMini'), ctx = cv.getContext('2d');
+  $('pPos').textContent = p.mode === 'freeroam' ? 'Pembroke' : p.mode === 'race' ? ('P' + p.pos + '/' + (p.cars ? p.cars.length : '')) : 'Time Trial';
+  $('pLap').textContent = p.mode === 'freeroam' ? 'Free Roam' : ('Lap ' + p.lap + (p.laps ? '/' + p.laps : ''));
+  const cv = $('townMap'), ctx = cv.getContext('2d'), dpr = window.devicePixelRatio || 1;
   ctx.clearRect(0, 0, cv.width, cv.height);
-  if (trkBase) ctx.drawImage(trkBase, 0, 0);
-  if (trkScale && p.cars) {
-    for (const c of p.cars) {
-      ctx.fillStyle = '#' + (c.c || 'ffffff');
-      ctx.beginPath();
-      ctx.arc(c.x * trkScale.s + trkScale.ox, c.z * trkScale.s + trkScale.oz, c.p ? 5 : 4, 0, 7);
-      ctx.fill();
-      if (c.p) { ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5; ctx.stroke(); }
-    }
+  if (baseCanvas) ctx.drawImage(baseCanvas, 0, 0); else return;
+  const T = mapT; if (!T || !p.cars) return;
+  for (const c of p.cars) {
+    const x = c.x * T.s + T.ox, z = c.z * T.s + T.oz;
+    if (c.p && p.ph != null) {                       // player = heading arrow
+      ctx.save(); ctx.translate(x, z); ctx.rotate(-p.ph);
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5 * dpr;
+      ctx.beginPath(); ctx.moveTo(0, -10 * dpr); ctx.lineTo(6 * dpr, 7 * dpr); ctx.lineTo(-6 * dpr, 7 * dpr); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    } else { ctx.fillStyle = '#' + (c.c || 'ffffff'); ctx.beginPath(); ctx.arc(x, z, (c.p ? 6 : 4) * dpr, 0, 7); ctx.fill(); if (c.p) { ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5 * dpr; ctx.stroke(); } }
   }
 }

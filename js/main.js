@@ -1604,6 +1604,7 @@ function buildFreeRoam() {
   $('lapCount').textContent = 'Explore';
   camMode = CAM_CHASE;
   updateHUD();
+  if (typeof sendWorldToPhone === 'function') sendWorldToPhone();   // phone shows the whole-town map
   initAudio(); startMusic({ id: 'town' });
   clock.getDelta();
 }

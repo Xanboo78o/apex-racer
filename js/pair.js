@@ -84,7 +84,8 @@ function initPairing() {
         // phone announced itself — ack so it knows the game is listening
         apexChannel.send({ type: 'broadcast', event: 'host-ack', payload: { name: account.username } });
         phoneConnected = true; updatePairStatusUI();
-        sendTrackToPhone();                      // give a freshly-joined phone the current track outline
+        if (typeof mode !== 'undefined' && mode === 'freeroam') sendWorldToPhone();
+        else sendTrackToPhone();                 // give a freshly-joined phone the current map
         sendBrakeConfig();                       // tell the phone whether/where to show a brake button
       })
       .on('broadcast', { event: 'brake' }, ({ payload }) => {
@@ -154,9 +155,15 @@ function sendTelemetry() {
   try {
     apexChannel.send({ type: 'broadcast', event: 'hud', payload: {
       s: spd, pos, lap: Math.max(1, player.lap + 1),
-      laps: track && track.def ? track.def.laps : 0, mode, cars: cs,
+      laps: track && track.def ? track.def.laps : 0, mode, cars: cs, ph: +player.heading.toFixed(3),
     } });
   } catch (e) {}
+}
+
+// game -> phone: switch the phone map to the whole-town view (free-roam). Phone has PEMBROKE locally.
+function sendWorldToPhone() {
+  if (!apexChannel || !phoneConnected) return;
+  try { apexChannel.send({ type: 'broadcast', event: 'world', payload: {} }); } catch (e) {}
 }
 
 // game -> phone: where to show the brake button ('off' | 'left' | 'right'), from brakeMode (main.js global).
