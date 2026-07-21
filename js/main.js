@@ -134,10 +134,11 @@ function terrainHeight(x, z) {
   if (!track || !track.nearestInfo) return 0;
   const info = track.nearestInfo(x, z);
   const i = info.i, r = track.rights[i], sp = track.samples[i];
+  const hw = track.width ? track.width[i] : track.halfW;   // per-street width in open world
   const lat = (x - sp.x) * r.x + (z - sp.z) * r.z;
-  const bankFall = THREE.MathUtils.clamp(1 - (info.d - track.halfW - 2) / 12, 0, 1);
+  const bankFall = THREE.MathUtils.clamp(1 - (info.d - hw - 2) / 12, 0, 1);
   const base = sp.y + lat * track.bank[i] * bankFall;   // banked plane on/near the road
-  const corr = track.halfW + 8;
+  const corr = hw + 8;
   const t = THREE.MathUtils.clamp((info.d - corr) / CORRIDOR, 0, 1);
   const e = t * t * (3 - 2 * t);
   return base + ambientHills(x, z, track.def.hills || 0) * e;
@@ -200,7 +201,7 @@ function boot() {
 
 function onKey(k) {
   if (k === 'escape') {
-    if (state === 'race' || state === 'tt' || state === 'countdown') pauseGame();
+    if (state === 'race' || state === 'tt' || state === 'countdown' || state === 'freeroam') pauseGame();
     else if (state === 'paused') resumeGame();
     return;
   }
@@ -1291,10 +1292,15 @@ function resetCar(car) {
 
 // ---------------------------------------------------------------- physics
 function surfaceAt(car) {
-  const { samples, halfW, def } = track;
-  const p = samples[car.idx];
+  const { def } = track;
+  if (track.open) {                                  // open world: nearest road of any street
+    const info = track.nearestInfo(car.x, car.z);
+    car.onRoad = info.d <= track.width[info.i] + 0.8;
+    return car.onRoad ? SURFACES.asphalt : SURFACES.grass;
+  }
+  const p = track.samples[car.idx];
   const d = Math.hypot(car.x - p.x, car.z - p.z);
-  car.onRoad = d <= halfW + 0.7;
+  car.onRoad = d <= track.halfW + 0.7;
   if (car.onRoad) return SURFACES[def.surface];
   return def.surface === 'dirt' || def.env === 'desert' ? SURFACES.sand : SURFACES.grass;
 }
@@ -1355,29 +1361,36 @@ function stepCar(car, input, dt) {
   car.x += car.velX * dt;
   car.z += car.velZ * dt;
 
-  const newIdx = nearestSample(car.x, car.z, car.idx, 26);
-  let didx = newIdx - car.idx;
-  const { N } = track;
-  if (didx > N / 2) didx -= N;
-  if (didx < -N / 2) didx += N;
-  car.idx = newIdx;
-  car.distAcc += didx;
+  // lap-progress odometer + centerline containment — CLOSED tracks only
+  if (!track.open) {
+    const newIdx = nearestSample(car.x, car.z, car.idx, 26);
+    let didx = newIdx - car.idx;
+    const { N } = track;
+    if (didx > N / 2) didx -= N;
+    if (didx < -N / 2) didx += N;
+    car.idx = newIdx;
+    car.distAcc += didx;
+  }
 
-  const sp = track.samples[car.idx];
   const surfY = terrainHeight(car.x, car.z);      // ride the real ground: road, grass, or hillside
   car.y += (surfY - car.y) * Math.min(1, dt * 12);
 
-  const d = Math.hypot(car.x - sp.x, car.z - sp.z);
-  if (d > track.outerLimit) {
-    const nx = (car.x - sp.x) / d, nz = (car.z - sp.z) / d;
-    car.x = sp.x + nx * track.outerLimit;
-    car.z = sp.z + nz * track.outerLimit;
-    const vOut = car.velX * nx + car.velZ * nz;
-    if (vOut > 0) {
-      car.velX -= vOut * nx * 1.35;
-      car.velZ -= vOut * nz * 1.35;
-      car.velX *= 0.9; car.velZ *= 0.9;
+  if (!track.open) {
+    const sp = track.samples[car.idx];
+    const d = Math.hypot(car.x - sp.x, car.z - sp.z);
+    if (d > track.outerLimit) {
+      const nx = (car.x - sp.x) / d, nz = (car.z - sp.z) / d;
+      car.x = sp.x + nx * track.outerLimit;
+      car.z = sp.z + nz * track.outerLimit;
+      const vOut = car.velX * nx + car.velZ * nz;
+      if (vOut > 0) {
+        car.velX -= vOut * nx * 1.35;
+        car.velZ -= vOut * nz * 1.35;
+        car.velX *= 0.9; car.velZ *= 0.9;
+      }
     }
+  } else if (typeof worldCollide === 'function') {
+    worldCollide(car);                            // open world: push out of buildings
   }
 }
 
@@ -1554,6 +1567,43 @@ function startGame(def, m) {
   if (typeof sendTrackToPhone === 'function') sendTrackToPhone();   // new track outline -> phone minimap
   initAudio(); startMusic(def);                                     // per-track music (speeds up on last lap)
   if (verstaCar) startVerstappenTheme(verstaCar);                   // his theme radiates from his car
+  clock.getDelta();
+}
+
+// ---------------------------------------------------------------- open world (Pembroke, NH)
+function startFreeRoam() {
+  if (!window.PEMBROKE || typeof buildWorld !== 'function') { toast('World data not loaded'); return; }
+  $('menu').style.display = 'none';
+  $('acctChip').style.display = 'none';
+  $('results').style.display = 'none';
+  state = 'menu';                                  // safe while the world builds (loop early-returns)
+  const ld = $('countdown'); ld.style.display = 'block'; ld.style.fontSize = '30px'; ld.textContent = 'Building Pembroke, NH…';
+  setTimeout(() => { buildFreeRoam(); ld.style.display = 'none'; ld.style.fontSize = ''; ld.textContent = ''; }, 60);
+}
+function buildFreeRoam() {
+  mode = 'freeroam';
+  paceMul = 1; fogMul = 1;
+  buildWorld();                                    // sets global `track` (open:true) + scene
+  cars = [];
+  player = makeCar(CAR_COLORS[0], true, 'You', HELMET_COLORS[0], playerVehicle);
+  cars.push(player);
+  scene.add(player.mesh);
+  // spawn on the road, facing along the nearest street
+  const sp = track.spawn;
+  player.x = sp.x; player.z = sp.z; player.y = terrainHeight(sp.x, sp.z);
+  const info = track.nearestInfo(sp.x, sp.z), r = track.rights[info.i];
+  player.heading = Math.atan2(-r.z, r.x);                  // align with the road tangent
+  player.velX = player.velZ = 0; player.idx = 0; player.distAcc = 0;
+  player.lap = 0; player.finished = false;
+  raceTime = 0;
+  state = 'freeroam';
+  $('hud').style.display = 'block';
+  $('trackLabel').textContent = 'Pembroke, NH';
+  $('position').textContent = 'Free Roam';
+  $('lapCount').textContent = 'Explore';
+  camMode = CAM_CHASE;
+  updateHUD();
+  initAudio(); startMusic({ id: 'town' });
   clock.getDelta();
 }
 
@@ -1909,6 +1959,12 @@ function drawMinimap() {
 function updateHUD() {
   const speed = Math.round(Math.hypot(player.velX, player.velZ) * 3.6 * SPEED_DISPLAY_SCALE);
   $('speed').textContent = speed;
+  if (mode === 'freeroam') {
+    $('position').textContent = player.onRoad ? 'Free Roam' : 'Off-road';
+    $('lapCount').textContent = 'Pembroke, NH';
+    $('curLap').textContent = '';
+    return;
+  }
   if (mode === 'race') {
     const order = [...cars].sort((a, b) => (b.lap * track.N + b.distAcc) - (a.lap * track.N + a.distAcc));
     const pos = order.indexOf(player) + 1;
@@ -1947,7 +2003,7 @@ function loop() {
     return;
   }
 
-  if (state === 'race' || state === 'tt') {
+  if (state === 'race' || state === 'tt' || state === 'freeroam') {
     raceTime += dt;
     // per-bot fluctuating top-speed limiter: slowly breathe each bot's cap within its shown-speed
     // band. Fast tier squares the wave so it hangs near the low end (195) and only rarely nears 200.
@@ -1992,7 +2048,7 @@ function loop() {
     }
     updateCarVisuals(dt);
     updateHUD();
-    drawMinimap();
+    if (!track.open) drawMinimap();
     // phone haptics: heavy shake when you're off the track; a light rumble on the Dust Devil dirt
     if (typeof sendRumble === 'function') {
       const pv = Math.hypot(player.velX, player.velZ);

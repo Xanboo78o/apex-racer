@@ -168,7 +168,10 @@ h1 {
 }
 h1 span { color: #ff3b3b; }
 .tagline { opacity: .65; margin: 6px 0 18px; font-size: 17px; letter-spacing: 1px; }
-#diffRow { margin: 0 0 26px; }
+#diffRow { margin: 0 0 26px; display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+#diffRow button { margin: 0 !important; }
+#openWorldBtn { background: #1c3a5c; border: 1px solid #3a6ea5; border-radius: 24px; padding: 9px 22px; font-size: 14px; }
+#openWorldBtn:hover { background: #27527f; }
 #hardBtn { background: #2b323d; border: 1px solid #4a5568; border-radius: 24px; padding: 9px 22px; font-size: 14px; letter-spacing: .5px; }
 #hardBtn:hover { background: #39424f; }
 #hardBtn.hard { background: #e02b2b; border-color: #ff6a5a; }
