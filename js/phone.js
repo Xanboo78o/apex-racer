@@ -218,50 +218,61 @@ function buildPhoneTrack(payload) {
   if (!payload || !payload.points || !payload.points.length) return;
   mapMode = 'track'; trackPts = payload.points; rebuildBase();
 }
+function bbOf(pts) { let a = 1e9, b = 1e9, c = -1e9, d = -1e9; for (const p of pts) { if (p[0] < a) a = p[0]; if (p[1] < b) b = p[1]; if (p[0] > c) c = p[0]; if (p[1] > d) d = p[1]; } return [a, b, c, d]; }
 function buildPhoneWorld() {
   if (!window.PEMBROKE) return;
-  mapMode = 'world'; rebuildBase();
+  mapMode = 'world';
+  const P = window.PEMBROKE;                          // precompute bboxes for view culling (once)
+  if (!P._pre) { for (const e of P.edges) e._bb = bbOf(e.pts); for (const w of (P.waterways || [])) w._bb = bbOf(w.pts); for (const w of (P.water || [])) w._bb = bbOf(w.poly); P._pre = 1; }
 }
-function rebuildBase() {
-  const cv = $('townMap'); if (!cv.width) return;
+function rebuildBase() {   // track view only (whole loop fits the screen); world draws live & centered
+  const cv = $('townMap'); if (!cv.width || mapMode !== 'track' || !trackPts) return;
   baseCanvas = document.createElement('canvas'); baseCanvas.width = cv.width; baseCanvas.height = cv.height;
   const ctx = baseCanvas.getContext('2d'), dpr = window.devicePixelRatio || 1;
   ctx.fillStyle = '#0f151c'; ctx.fillRect(0, 0, cv.width, cv.height);
-  if (mapMode === 'world') {
-    const P = window.PEMBROKE, b = P.bbox; mapT = fit(b[0], b[1], b[2], b[3]);
-    const T = mapT, X = x => x * T.s + T.ox, Z = z => z * T.s + T.oz;
-    ctx.strokeStyle = '#3a6fc0'; ctx.lineWidth = 3 * dpr; ctx.lineJoin = 'round'; ctx.lineCap = 'round';   // water
-    for (const w of (P.waterways || [])) { ctx.beginPath(); w.pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))); ctx.stroke(); }
-    ctx.fillStyle = '#2f5f9e'; for (const w of (P.water || [])) { ctx.beginPath(); w.poly.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))); ctx.fill(); }
-    ctx.strokeStyle = '#7e8896'; ctx.lineWidth = 1.4 * dpr;                                                // roads
-    for (const e of P.edges) { const big = /motorway|trunk|primary|secondary/.test(e.cls); ctx.lineWidth = (big ? 2.4 : 1.3) * dpr; ctx.strokeStyle = big ? '#c9d3df' : '#6b7684'; ctx.beginPath(); e.pts.forEach((p, i) => i ? ctx.lineTo(X(p[0]), Z(p[1])) : ctx.moveTo(X(p[0]), Z(p[1]))); ctx.stroke(); }
-    ctx.fillStyle = '#e2c34a';                                                                            // schools
-    for (const s of (P.schools || [])) { ctx.beginPath(); ctx.arc(X(s.x), Z(s.z), 5 * dpr, 0, 7); ctx.fill(); }
-  } else if (mapMode === 'track' && trackPts) {
-    let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9; for (const p of trackPts) { mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]); mnz = Math.min(mnz, p[1]); mxz = Math.max(mxz, p[1]); }
-    mapT = fit(mnx, mnz, mxx, mxz); const T = mapT, X = x => x * T.s + T.ox, Z = z => z * T.s + T.oz, pts = trackPts;
-    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 5 * dpr; ctx.lineJoin = 'round'; ctx.beginPath();
-    const G = i => pts[(i + pts.length) % pts.length]; ctx.moveTo(X(G(0)[0]), Z(G(0)[1]));
-    for (let i = 0; i < pts.length; i++) { const a = G(i), b = G(i + 1); ctx.quadraticCurveTo(X(a[0]), Z(a[1]), X((a[0] + b[0]) / 2), Z((a[1] + b[1]) / 2)); }
-    ctx.closePath(); ctx.stroke();
-  }
+  let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9; for (const p of trackPts) { mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]); mnz = Math.min(mnz, p[1]); mxz = Math.max(mxz, p[1]); }
+  mapT = fit(mnx, mnz, mxx, mxz); const T = mapT, X = x => x * T.s + T.ox, Z = z => z * T.s + T.oz, pts = trackPts;
+  ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 5 * dpr; ctx.lineJoin = 'round'; ctx.beginPath();
+  const G = i => pts[(i + pts.length) % pts.length]; ctx.moveTo(X(G(0)[0]), Z(G(0)[1]));
+  for (let i = 0; i < pts.length; i++) { const a = G(i), b = G(i + 1); ctx.quadraticCurveTo(X(a[0]), Z(a[1]), X((a[0] + b[0]) / 2), Z((a[1] + b[1]) / 2)); }
+  ctx.closePath(); ctx.stroke();
+}
+function bbNear(bb, px, pz, hx, hz) { return bb && !(bb[2] < px - hx || bb[0] > px + hx || bb[3] < pz - hz || bb[1] > pz + hz); }
+function drawWorldFollow(p) {                          // GPS-style: player centred, zoomed in
+  const cv = $('townMap'), ctx = cv.getContext('2d'), dpr = window.devicePixelRatio || 1, P = window.PEMBROKE;
+  const me = (p.cars || []).find(c => c.p) || { x: 0, z: 0 }, px = me.x, pz = me.z, ph = p.ph || 0;
+  const scale = cv.height / 1800;                      // ~1.8 km visible top-to-bottom
+  const cxp = cv.width / 2, czp = cv.height / 2, X = x => (x - px) * scale + cxp, Z = z => (z - pz) * scale + czp;
+  const hx = cxp / scale + 80, hz = czp / scale + 80;
+  ctx.fillStyle = '#0f151c'; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.fillStyle = '#2f5f9e'; for (const w of (P.water || [])) { if (!bbNear(w._bb, px, pz, hx, hz)) continue; ctx.beginPath(); w.poly.forEach((q, i) => i ? ctx.lineTo(X(q[0]), Z(q[1])) : ctx.moveTo(X(q[0]), Z(q[1]))); ctx.fill(); }
+  ctx.strokeStyle = '#3a6fc0'; ctx.lineWidth = 4 * dpr; for (const w of (P.waterways || [])) { if (!bbNear(w._bb, px, pz, hx, hz)) continue; ctx.beginPath(); w.pts.forEach((q, i) => i ? ctx.lineTo(X(q[0]), Z(q[1])) : ctx.moveTo(X(q[0]), Z(q[1]))); ctx.stroke(); }
+  for (const e of P.edges) { if (!bbNear(e._bb, px, pz, hx, hz)) continue; const big = /motorway|trunk|primary|secondary/.test(e.cls); ctx.lineWidth = (big ? 5 : 3) * dpr; ctx.strokeStyle = big ? '#dbe3ee' : '#8a95a4'; ctx.beginPath(); e.pts.forEach((q, i) => i ? ctx.lineTo(X(q[0]), Z(q[1])) : ctx.moveTo(X(q[0]), Z(q[1]))); ctx.stroke(); }
+  ctx.fillStyle = '#e2c34a'; for (const s of (P.schools || [])) { if (Math.abs(s.x - px) > hx || Math.abs(s.z - pz) > hz) continue; ctx.beginPath(); ctx.arc(X(s.x), Z(s.z), 8 * dpr, 0, 7); ctx.fill(); }
+  // player arrow (big, at centre, pointing where the car faces)
+  const fx = Math.sin(ph), fz = Math.cos(ph), rx = -fz, rz = fx, S = dpr;
+  ctx.fillStyle = '#e23b2e'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 3 * S;
+  ctx.beginPath();
+  ctx.moveTo(cxp + fx * 22 * S, czp + fz * 22 * S);
+  ctx.lineTo(cxp - fx * 12 * S + rx * 14 * S, czp - fz * 12 * S + rz * 14 * S);
+  ctx.lineTo(cxp - fx * 5 * S, czp - fz * 5 * S);
+  ctx.lineTo(cxp - fx * 12 * S - rx * 14 * S, czp - fz * 12 * S - rz * 14 * S);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
 }
 function updatePhoneHud(p) {
   if (!p) return;
   $('pSpeed').textContent = p.s != null ? p.s : 0;
   $('pPos').textContent = p.mode === 'freeroam' ? 'Pembroke' : p.mode === 'race' ? ('P' + p.pos + '/' + (p.cars ? p.cars.length : '')) : 'Time Trial';
   $('pLap').textContent = p.mode === 'freeroam' ? 'Free Roam' : ('Lap ' + p.lap + (p.laps ? '/' + p.laps : ''));
+  if (mapMode === 'world') { drawWorldFollow(p); return; }
   const cv = $('townMap'), ctx = cv.getContext('2d'), dpr = window.devicePixelRatio || 1;
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (baseCanvas) ctx.drawImage(baseCanvas, 0, 0); else return;
   const T = mapT; if (!T || !p.cars) return;
   for (const c of p.cars) {
     const x = c.x * T.s + T.ox, z = c.z * T.s + T.oz;
-    if (c.p && p.ph != null) {                       // player = heading arrow
-      ctx.save(); ctx.translate(x, z); ctx.rotate(-p.ph);
-      ctx.fillStyle = '#fff'; ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5 * dpr;
-      ctx.beginPath(); ctx.moveTo(0, -10 * dpr); ctx.lineTo(6 * dpr, 7 * dpr); ctx.lineTo(-6 * dpr, 7 * dpr); ctx.closePath(); ctx.fill(); ctx.stroke();
-      ctx.restore();
-    } else { ctx.fillStyle = '#' + (c.c || 'ffffff'); ctx.beginPath(); ctx.arc(x, z, (c.p ? 6 : 4) * dpr, 0, 7); ctx.fill(); if (c.p) { ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5 * dpr; ctx.stroke(); } }
+    ctx.fillStyle = '#' + (c.c || 'ffffff'); ctx.beginPath(); ctx.arc(x, z, (c.p ? 6 : 4) * dpr, 0, 7); ctx.fill();
+    if (c.p) { ctx.strokeStyle = '#111'; ctx.lineWidth = 1.5 * dpr; ctx.stroke(); }
   }
 }

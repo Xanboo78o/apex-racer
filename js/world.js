@@ -29,6 +29,7 @@ function worldCollide(car) {
   }
 }
 
+const HILL_EXAG = 3.5;                             // very exaggerated NH hills (166m -> ~580m relief)
 // bilinear elevation from the baked heightmap
 function makeHeightAt(H) {
   return (x, z) => {
@@ -36,7 +37,7 @@ function makeHeightAt(H) {
     cf = Math.max(0, Math.min(H.cols - 1.001, cf)); rf = Math.max(0, Math.min(H.rows - 1.001, rf));
     const c0 = cf | 0, r0 = rf | 0, fc = cf - c0, fr = rf - r0, d = H.data, cw = H.cols;
     const a = d[r0 * cw + c0], b = d[r0 * cw + c0 + 1], c = d[(r0 + 1) * cw + c0], e = d[(r0 + 1) * cw + c0 + 1];
-    return (a * (1 - fc) + b * fc) * (1 - fr) + (c * (1 - fc) + e * fc) * fr;
+    return ((a * (1 - fc) + b * fc) * (1 - fr) + (c * (1 - fc) + e * fc) * fr) * HILL_EXAG;
   };
 }
 
@@ -153,14 +154,25 @@ function buildWorld() {
   bInst.count = bi; scene.add(bInst);
   { const og = box.clone(), op = og.attributes.position; for (let i = 0; i < op.count; i++) op.setXYZ(i, op.getX(i) * 1.04, op.getY(i) * 1.02, op.getZ(i) * 1.04); op.needsUpdate = true; const oI = new THREE.InstancedMesh(og, OUTLINE_MAT, bi); oI.instanceMatrix = bInst.instanceMatrix; oI.count = bi; oI.frustumCulled = false; scene.add(oI); }
 
-  // ---- trees scattered inside forest polygons (instanced conifers + trunks, capped) ----
-  { const TREE_CAP = 6500; const areas = (P.forests || []).map(f => polyArea2(f.poly)); const tot = areas.reduce((a, b) => a + b, 0) || 1;
-    const tpos = [];
-    (P.forests || []).forEach((f, fi) => {
+  // ---- trees: dense inside OSM forest polys + a rural fill across the countryside (NH is woods) ----
+  { const tpos = [];
+    const areas = (P.forests || []).map(f => polyArea2(f.poly)); const tot = areas.reduce((a, b) => a + b, 0) || 1;
+    (P.forests || []).forEach((f, fi) => {                     // dense in mapped forests
       const poly = f.poly; let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9; for (const q of poly) { if (q[0] < mnx) mnx = q[0]; if (q[0] > mxx) mxx = q[0]; if (q[1] < mnz) mnz = q[1]; if (q[1] > mxz) mxz = q[1]; }
-      const want = Math.floor(TREE_CAP * (areas[fi] / tot) * (f.dense || 1)); let placed = 0, tries = 0;
+      const want = Math.floor(9000 * (areas[fi] / tot) * (f.dense || 1)); let placed = 0, tries = 0;
       while (placed < want && tries < want * 8) { tries++; const x = mnx + Math.random() * (mxx - mnx), z = mnz + Math.random() * (mxz - mnz); if (polyInPoly(x, z, poly)) { tpos.push(x, z); placed++; } }
     });
+    // rural fill: scatter across the whole map wherever it's off-road and not in the built-up village
+    { const FILL = 14000, mnx = minX - 200, mxx = maxX + 200, mnz = minZ - 200, mxz = maxZ + 200; let tries = 0, placed = 0;
+      while (placed < FILL && tries < FILL * 5) { tries++;
+        const x = mnx + Math.random() * (mxx - mnx), z = mnz + Math.random() * (mxz - mnz);
+        const info = nearestInfo(x, z);
+        if (info.d < 24) continue;                             // keep clear of roads
+        const bc = Math.floor(x / WORLD_BCELL) + ',' + Math.floor(z / WORLD_BCELL);
+        if (WORLD_BHASH.has(bc) && Math.random() < 0.85) continue;   // thin out over built areas
+        tpos.push(x, z); placed++;
+      }
+    }
     const nT = tpos.length / 2;
     if (nT) {
       const cone = new THREE.ConeGeometry(3.4, 9, 6), coneM = toonMat(0x3f7d34);
