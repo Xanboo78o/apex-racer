@@ -1957,6 +1957,21 @@ function drawMinimap() {
 }
 
 // ---------------------------------------------------------------- HUD
+let _lbT = 0;
+function updateLeaderboard(order) {
+  const lb = $('leaderboard'); lb.style.display = 'flex';
+  const now = performance.now();
+  if (now - _lbT < 130) return;                    // ~8Hz rebuild is plenty
+  _lbT = now;
+  let html = '';
+  for (let i = 0; i < order.length; i++) {
+    const c = order[i], hex = '#' + c.color.toString(16).padStart(6, '0');
+    html += `<div class="lbRow${c.isPlayer ? ' me' : ''}${c.finished ? ' done' : ''}">`
+      + `<span class="pos">${i + 1}</span><span class="sw" style="background:${hex}"></span>`
+      + `<span class="nm">${c.name}</span></div>`;
+  }
+  lb.innerHTML = html;
+}
 function updateHUD() {
   const speed = Math.round(Math.hypot(player.velX, player.velZ) * 3.6 * SPEED_DISPLAY_SCALE);
   $('speed').textContent = speed;
@@ -1964,6 +1979,7 @@ function updateHUD() {
     $('position').textContent = player.onRoad ? 'Free Roam' : 'Off-road';
     $('lapCount').textContent = 'Pembroke, NH';
     $('curLap').textContent = '';
+    $('leaderboard').style.display = 'none';
     return;
   }
   if (mode === 'race') {
@@ -1971,9 +1987,11 @@ function updateHUD() {
     const pos = order.indexOf(player) + 1;
     $('position').textContent = 'P' + pos + ' / ' + cars.length;
     $('lapCount').textContent = 'Lap ' + Math.min(player.lap + 1, track.def.laps) + ' / ' + track.def.laps;
+    updateLeaderboard(order);
   } else {
     $('position').textContent = 'Time Trial';
     $('lapCount').textContent = player.lap >= 1 ? 'Lap ' + (player.lap + 1) : 'Out lap';
+    $('leaderboard').style.display = 'none';
   }
   $('curLap').textContent = fmtTime(player.lap >= 0 || mode === 'race' ? raceTime * 1000 - player.lapStart : null);
 }
