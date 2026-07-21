@@ -1505,6 +1505,7 @@ function startGame(def, m) {
   for (let k = roster.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); [roster[k], roster[j]] = [roster[j], roster[k]]; }
   const verstappen = Math.random() < 0.2;            // ~1 in 5 games: a cruising monster shows up
   if (verstappen) roster[0] = 'versta';
+  let verstaCar = null;
   for (let i = 0; i < nAI; i++) {
     const key = roster[i], P = PERSONAS[key], isV = key === 'versta';
     const name = isV ? 'Verstappen' : AI_NAMES[i % AI_NAMES.length];
@@ -1525,6 +1526,7 @@ function startGame(def, m) {
     c.wW2 = 1.7 + Math.random() * 1.4;   c.wP2 = Math.random() * Math.PI * 2;
     c.wJit = P.jit + Math.random() * 0.02;            // steering imperfection
     c.wJW = 3.0 + Math.random() * 2.5;   c.wJP = Math.random() * Math.PI * 2;
+    if (isV) verstaCar = c;
     cars.push(c);
   }
   if (verstappen) toast('⚠ Verstappen has entered the race');
@@ -1551,12 +1553,13 @@ function startGame(def, m) {
   updateHUD();
   if (typeof sendTrackToPhone === 'function') sendTrackToPhone();   // new track outline -> phone minimap
   initAudio(); startMusic(def);                                     // per-track music (speeds up on last lap)
+  if (verstaCar) startVerstappenTheme(verstaCar);                   // his theme radiates from his car
   clock.getDelta();
 }
 
 function endRace() {
   state = 'results';
-  stopMusic();
+  stopMusic(); stopVerstappenTheme();
   const standings = [...cars].sort((a, b) => {
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     if (a.finished) return a.finishTime - b.finishTime;
@@ -1577,7 +1580,7 @@ function endRace() {
 
 function backToMenu() {
   state = 'menu';
-  stopMusic();
+  stopMusic(); stopVerstappenTheme();
   $('results').style.display = 'none';
   $('pause').style.display = 'none';
   $('hud').style.display = 'none';
@@ -1778,6 +1781,79 @@ function startMusic(def) {
 }
 function stopMusic() { MUSIC.playing = false; if (MUSIC.timer) { clearInterval(MUSIC.timer); MUSIC.timer = null; } }
 function setMusicFinalLap(on) { MUSIC.bpm = on ? Math.round(MUSIC.baseBpm * 1.28) : MUSIC.baseBpm; }
+
+// ---------------------------------------------------------------- Verstappen's entrance theme
+// Bass-heavy boss motif that RADIATES from his car (3D panner), with exaggerated Doppler as he
+// blasts past + big reverb. Comedy is the point.
+const _v3 = new THREE.Vector3();                           // scratch for camera direction
+const VTHEME = { on: false, car: null, step: 0, nextT: 0, bassNote: 33, leadNote: 57, nodes: null };
+const VT_ROOT = 33;                                        // low, menacing
+const VT_BASS = [0, 0, 7, 0, 5, 5, 3, 5, 0, 0, 7, 0, 8, 8, 7, 5];       // 16-step ostinato (semitones)
+const VT_LEAD = [12, -1, 15, -1, 14, -1, 12, 10, 12, -1, 19, 17, 15, 14, 12, -1]; // -1 = rest
+function _audPos(n, x, y, z) { if (n.positionX) { n.positionX.value = x; n.positionY.value = y; n.positionZ.value = z; } else if (n.setPosition) { n.setPosition(x, y, z); } }
+function _audOri(n, fx, fy, fz, ux, uy, uz) { if (n.forwardX) { n.forwardX.value = fx; n.forwardY.value = fy; n.forwardZ.value = fz; n.upX.value = ux; n.upY.value = uy; n.upZ.value = uz; } else if (n.setOrientation) { n.setOrientation(fx, fy, fz, ux, uy, uz); } }
+function _reverbIR(ctx, sec, decay) {
+  const len = Math.floor(ctx.sampleRate * sec), b = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) { const d = b.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, decay); }
+  return b;
+}
+function startVerstappenTheme(car) {
+  if (!audio.ctx || !car) return; const ctx = audio.ctx;
+  const panner = ctx.createPanner();
+  panner.panningModel = 'HRTF'; panner.distanceModel = 'inverse'; panner.refDistance = 28; panner.maxDistance = 2600; panner.rolloffFactor = 1.0;
+  const mix = ctx.createGain(); mix.gain.value = 1.0;
+  const boost = ctx.createBiquadFilter(); boost.type = 'lowshelf'; boost.frequency.value = 200; boost.gain.value = 15; mix.connect(boost);
+  const dry = ctx.createGain(); dry.gain.value = 1.0; boost.connect(dry); dry.connect(panner);
+  const conv = ctx.createConvolver(); conv.buffer = _reverbIR(ctx, 2.8, 2.4);
+  const rs = ctx.createGain(); rs.gain.value = 0.55; boost.connect(rs); rs.connect(conv);
+  const rg = ctx.createGain(); rg.gain.value = 0.7; conv.connect(rg); rg.connect(panner);
+  panner.connect(audio.master);
+  const subEnv = ctx.createGain(); subEnv.gain.value = 0.0001;                 // omni sub you FEEL, beat-gated
+  const subProx = ctx.createGain(); subProx.gain.value = 0; subEnv.connect(subProx); subProx.connect(audio.master);
+  const lead = ctx.createOscillator(); lead.type = 'sawtooth';
+  const lead2 = ctx.createOscillator(); lead2.type = 'square'; lead2.detune.value = 9;
+  const bass = ctx.createOscillator(); bass.type = 'sawtooth';
+  const sub = ctx.createOscillator(); sub.type = 'sine';
+  const leadG = ctx.createGain(); leadG.gain.value = 0.0001; lead.connect(leadG); lead2.connect(leadG); leadG.connect(mix);
+  const bassG = ctx.createGain(); bassG.gain.value = 0.0001; bass.connect(bassG); bassG.connect(mix);
+  sub.connect(subEnv);
+  [lead, lead2, bass, sub].forEach(o => o.start());
+  VTHEME.on = true; VTHEME.car = car; VTHEME.step = 0; VTHEME.nextT = ctx.currentTime + 0.05;
+  VTHEME.nodes = { panner, mix, dry, conv, rs, rg, lead, lead2, bass, sub, leadG, bassG, subEnv, subProx };
+}
+function stopVerstappenTheme() {
+  if (!VTHEME.on) return; VTHEME.on = false;
+  try { const n = VTHEME.nodes; [n.lead, n.lead2, n.bass, n.sub].forEach(o => { try { o.stop(); } catch (e) {} }); } catch (e) {}
+  VTHEME.nodes = null; VTHEME.car = null;
+}
+function updateVerstappenTheme() {
+  if (!VTHEME.on || !audio.ctx || !player || !VTHEME.car) return;
+  const ctx = audio.ctx, n = VTHEME.nodes, car = VTHEME.car;
+  _audPos(ctx.listener, camera.position.x, camera.position.y, camera.position.z);
+  const fwd = camera.getWorldDirection(_v3);
+  _audOri(ctx.listener, fwd.x, fwd.y, fwd.z, 0, 1, 0);
+  _audPos(n.panner, car.x, car.y + 1.2, car.z);
+  // exaggerated Doppler from radial relative velocity (source vs listener along the sightline)
+  const dx = car.x - camera.position.x, dz = car.z - camera.position.z, dist = Math.hypot(dx, dz) || 1;
+  const vrel = ((car.velX - player.velX) * dx + (car.velZ - player.velZ) * dz) / dist;   // + = receding
+  const C = 200; let dopp = C / (C + vrel); dopp = Math.max(0.5, Math.min(1.85, dopp));
+  const spb = 60 / 126 / 4;
+  if (VTHEME.nextT < ctx.currentTime - 0.5) VTHEME.nextT = ctx.currentTime;      // after a pause, don't burst
+  while (VTHEME.nextT < ctx.currentTime + 0.1) {
+    const t = VTHEME.nextT, s = VTHEME.step % 16;
+    VTHEME.bassNote = VT_ROOT + VT_BASS[s];
+    const ld = VT_LEAD[s]; if (ld >= 0) VTHEME.leadNote = VT_ROOT + 24 + ld;
+    n.bassG.gain.cancelScheduledValues(t); n.bassG.gain.setValueAtTime(0.35, t); n.bassG.gain.exponentialRampToValueAtTime(0.08, t + spb * 1.6);
+    if (s % 2 === 0) { n.subEnv.gain.cancelScheduledValues(t); n.subEnv.gain.setValueAtTime(1.0, t); n.subEnv.gain.exponentialRampToValueAtTime(0.02, t + spb * 2.2); }
+    if (ld >= 0) { n.leadG.gain.cancelScheduledValues(t); n.leadG.gain.setValueAtTime(0.2, t); n.leadG.gain.exponentialRampToValueAtTime(0.02, t + spb * 1.8); }
+    VTHEME.step++; VTHEME.nextT += spb;
+  }
+  n.bass.frequency.value = midiHz(VTHEME.bassNote) * dopp;
+  n.sub.frequency.value = midiHz(VTHEME.bassNote - 12) * dopp;
+  n.lead.frequency.value = midiHz(VTHEME.leadNote) * dopp;
+  n.lead2.frequency.value = midiHz(VTHEME.leadNote) * dopp;
+  n.subProx.gain.setTargetAtTime(0.55 * Math.max(0, 1 - dist / 220), ctx.currentTime, 0.05);
+}
 function updateAudio(dt) {
   if (!audio.ctx || !player) return;
   const active = state === 'race' || state === 'tt' || state === 'countdown';
@@ -1805,6 +1881,7 @@ function updateAudio(dt) {
   audio.inGain.gain.setTargetAtTime(active ? Math.min(speed / 900, 0.05) + thr * 0.03 : 0, audio.ctx.currentTime, 0.06);
   // tyre scrub
   audio.nGain.gain.setTargetAtTime(active && player.slip > 5 && player.onRoad ? Math.min((player.slip - 5) / 40, 0.16) : 0, audio.ctx.currentTime, 0.03);
+  updateVerstappenTheme();                          // spatial + doppler theme radiating from his car
 }
 
 // ---------------------------------------------------------------- minimap
